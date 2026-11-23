@@ -1,0 +1,309 @@
+'use strict';
+/* ============================================================
+   Nexus ERP — core: data layer, helpers, modal, search, router.
+   Runs entirely in the browser; data persists in localStorage
+   and can be exported/imported as JSON. No dependencies.
+   UI language: English / Arabic (RTL) / German (see i18n.js).
+   ============================================================ */
+
+const DB_KEY = 'nexus-erp-v1';
+const STAGES = ['Lead', 'Qualified', 'Proposal', 'Negotiation', 'Won', 'Lost'];
+const OPEN_STAGES = STAGES.filter(s => s !== 'Won' && s !== 'Lost');
+const STAGE_COLORS = {
+  Lead: '#60a5fa', Qualified: '#818cf8', Proposal: '#f59e0b',
+  Negotiation: '#a855f7', Won: '#22c55e', Lost: '#94a3b8',
+};
+
+/* Global registry: modules register their views, quick-add actions
+   and editors here so core can route, search and cross-link. */
+const App = { views: {}, quickAdd: {}, editors: {} };
+
+/* ---------------- Data layer ---------------- */
+
+function emptyData() {
+  return {
+    meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1 },
+    companies: [], contacts: [], deals: [], tasks: [], activities: [],
+    products: [], suppliers: [], invoices: [], purchases: [],
+    ledger: [], employees: [],
+  };
+}
+
+const store = {
+  data: null,
+  load() {
+    try {
+      const raw = localStorage.getItem(DB_KEY);
+      this.data = raw ? JSON.parse(raw) : seedData();
+    } catch (e) {
+      console.error('Failed to load saved data, reseeding.', e);
+      this.data = seedData();
+    }
+    if (!this.data || !this.data.meta) this.data = seedData();
+    // tolerate exports missing newer collections
+    for (const key of Object.keys(emptyData())) if (!this.data[key]) this.data[key] = emptyData()[key];
+    this.save();
+  },
+  save() {
+    try {
+      localStorage.setItem(DB_KEY, JSON.stringify(this.data));
+    } catch (e) {
+      console.error('Save failed:', e);
+      if (typeof toast === 'function') toast(t('Could not save data. Browser storage is full.'));
+    }
+  },
+  add(coll, row) {
+    row.id = this.data.meta.nextId++;
+    row.created_at = row.created_at || new Date().toISOString();
+    this.data[coll].push(row);
+    this.save();
+    return row;
+  },
+  update(coll, id, patch) {
+    const row = this.data[coll].find(r => r.id === id);
+    if (!row) return null;
+    Object.assign(row, patch);
+    if (coll === 'deals') row.updated_at = new Date().toISOString();
+    this.save();
+    return row;
+  },
+  remove(coll, id) {
+    const i = this.data[coll].findIndex(r => r.id === id);
+    if (i >= 0) { this.data[coll].splice(i, 1); this.save(); }
+  },
+  find(coll, id) { return this.data[coll].find(r => r.id === id) || null; },
+  company(id) { return this.find('companies', id); },
+  contact(id) { return this.find('contacts', id); },
+  deal(id) { return this.find('deals', id); },
+  product(id) { return this.find('products', id); },
+  supplier(id) { return this.find('suppliers', id); },
+  invoice(id) { return this.find('invoices', id); },
+  employee(id) { return this.find('employees', id); },
+};
+
+/* ---------------- Helpers ---------------- */
+
+const $ = sel => document.querySelector(sel);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = v => new Intl.NumberFormat(localeTag(), { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(Number(v) || 0);
+const money0 = v => new Intl.NumberFormat(localeTag(), { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(v) || 0);
+const contactName = c => c ? `${c.first_name} ${c.last_name}`.trim() : '';
+const companyOf = row => row && row.company_id ? store.company(row.company_id) : null;
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const monthStr = () => todayStr().slice(0, 7);
+const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+const idsOrNull = v => (v === '' || v == null ? null : Number(v));
+
+function dueLabel(due) {
+  if (!due) return t('No date');
+  const td = todayStr();
+  if (due < td) return `${t('Overdue')} · ${due}`;
+  if (due === td) return t('Due today');
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  if (due === tomorrow.toISOString().slice(0, 10)) return t('Due tomorrow');
+  return `${t('Due')} ${due}`;
+}
+
+function relTime(isoStr) {
+  const then = new Date(isoStr); const now = new Date();
+  const mins = Math.round((now - then) / 60000);
+  if (mins < 1) return t('just now');
+  if (mins < 60) return `${mins}${t('m ago')}`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}${t('h ago')}`;
+  const days = Math.round(hrs / 24);
+  return days === 1 ? t('yesterday') : `${days}${t('d ago')}`;
+}
+
+function toast(msg) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.add('hidden'), 2200);
+}
+
+/* ---------------- Modal form ---------------- */
+
+let modalSubmit = null;
+
+function openModal(title, fields, onSubmit) {
+  $('#modalTitle').textContent = title;
+  const form = $('#modalForm');
+  form.innerHTML = '<div class="form-grid">' + fields.map(f => {
+    const full = (f.full || f.type === 'textarea') ? ' full' : '';
+    const req = f.required ? ' required' : '';
+    let control;
+    const val = f.value ?? '';
+    if (f.type === 'select') {
+      control = `<select name="${f.key}"${req}>` +
+        (f.allowEmpty ? `<option value="">${esc(f.allowEmpty)}</option>` : '') +
+        f.options.map(o => {
+          const ov = typeof o === 'object' ? o.value : o;
+          const ol = typeof o === 'object' ? o.label : o;
+          return `<option value="${esc(ov)}"${String(ov) === String(val) ? ' selected' : ''}>${esc(ol)}</option>`;
+        }).join('') + '</select>';
+    } else if (f.type === 'textarea') {
+      control = `<textarea name="${f.key}" placeholder="${esc(f.placeholder || '')}">${esc(val)}</textarea>`;
+    } else {
+      control = `<input name="${f.key}" type="${f.type || 'text'}" value="${esc(val)}" placeholder="${esc(f.placeholder || '')}"${req}${f.type === 'number' ? ' step="any"' : ''}>`;
+    }
+    return `<div class="field${full}"><label>${esc(f.label)}${f.required ? ' *' : ''}</label>${control}</div>`;
+  }).join('') + `</div>
+  <div class="modal-actions">
+    <button type="button" class="secondary-btn" id="modalCancel">${t('Cancel')}</button>
+    <button type="submit" class="primary-btn">${t('Save')}</button>
+  </div>`;
+  modalSubmit = onSubmit;
+  $('#modalBackdrop').classList.remove('hidden');
+  $('#modalCancel').onclick = closeModal;
+  const first = form.querySelector('input, select, textarea');
+  if (first) first.focus();
+}
+
+function closeModal() {
+  $('#modalBackdrop').classList.add('hidden');
+  modalSubmit = null;
+}
+
+function bindModal() {
+  $('#modalClose').onclick = closeModal;
+  $('#modalBackdrop').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modalBackdrop').classList.contains('hidden')) closeModal(); });
+  $('#modalForm').addEventListener('submit', e => {
+    e.preventDefault();
+    if (!e.target.reportValidity()) return;
+    const out = {};
+    new FormData(e.target).forEach((v, k) => { out[k] = typeof v === 'string' ? v.trim() : v; });
+    const fn = modalSubmit;
+    closeModal();
+    if (fn) fn(out);
+  });
+}
+
+function confirmDelete(label, fn) {
+  if (window.confirm(t('Delete {item}? This cannot be undone.').replace('{item}', label))) { fn(); render(); }
+}
+
+/* ---------------- Search ---------------- */
+
+function runSearch(q) {
+  const needle = q.toLowerCase();
+  const hits = [];
+  store.data.contacts.forEach(c => {
+    if (`${contactName(c)} ${c.email} ${c.phone} ${c.position} ${c.tags}`.toLowerCase().includes(needle))
+      hits.push({ kind: t('Contact'), label: contactName(c), sub: c.email || c.phone || '', go: () => App.editors.contact(c) });
+  });
+  store.data.companies.forEach(c => {
+    if (`${c.name} ${c.industry} ${c.email}`.toLowerCase().includes(needle))
+      hits.push({ kind: t('Company'), label: c.name, sub: c.industry || '', go: () => App.editors.company(c) });
+  });
+  store.data.deals.forEach(x => {
+    if (`${x.title} ${x.stage} ${x.notes}`.toLowerCase().includes(needle))
+      hits.push({ kind: t('Deal'), label: x.title, sub: `${t(x.stage)} · ${money0(x.value)}`, go: () => App.editors.deal(x) });
+  });
+  store.data.products.forEach(p => {
+    if (`${p.name} ${p.sku} ${p.category}`.toLowerCase().includes(needle))
+      hits.push({ kind: t('Product'), label: p.name, sub: `${p.sku} · ${t('stock')} ${p.stock}`, go: () => App.editors.product(p) });
+  });
+  store.data.invoices.forEach(inv => {
+    const c = inv.contact_id ? store.contact(inv.contact_id) : null;
+    if (`${inv.number} ${inv.status} ${c ? contactName(c) : ''}`.toLowerCase().includes(needle))
+      hits.push({ kind: t('Invoice'), label: inv.number, sub: `${t(inv.status)} · ${money(invoiceTotal(inv))}`, go: () => App.editors.invoice(inv) });
+  });
+  store.data.suppliers.forEach(s => {
+    if (`${s.name} ${s.contact_person} ${s.email}`.toLowerCase().includes(needle))
+      hits.push({ kind: t('Supplier'), label: s.name, sub: s.contact_person || '', go: () => App.editors.supplier(s) });
+  });
+  return hits.slice(0, 8);
+}
+
+function bindSearch() {
+  const input = $('#globalSearch');
+  const box = $('#searchResults');
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    if (!q) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+    const hits = runSearch(q);
+    box.innerHTML = hits.length
+      ? hits.map((h, i) => `<button class="search-hit" data-i="${i}"><span class="kind">${esc(h.kind)}</span><span class="grow">${esc(h.label)}</span><span class="cell-sub">${esc(h.sub)}</span></button>`).join('')
+      : `<div class="search-empty">${t('No matches.')}</div>`;
+    box.classList.remove('hidden');
+    box.querySelectorAll('.search-hit').forEach(b => {
+      b.onclick = () => { box.classList.add('hidden'); input.value = ''; hits[Number(b.dataset.i)].go(); };
+    });
+  });
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.search-wrap')) box.classList.add('hidden');
+  });
+}
+
+/* ---------------- Quick add ---------------- */
+
+function bindQuickAdd() {
+  $('#quickAddBtn').onclick = () => {
+    const fn = App.quickAdd[currentView] || App.quickAdd.contacts;
+    if (fn) fn();
+  };
+}
+
+/* ---------------- Export / import ---------------- */
+
+function bindExportImport() {
+  $('#exportBtn').onclick = () => {
+    const blob = new Blob([JSON.stringify(store.data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `nexus-erp-export-${todayStr()}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast(t('Data exported'));
+  };
+  $('#importInput').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (!data || !data.meta || !Array.isArray(data.contacts) || !Array.isArray(data.companies)
+          || !Array.isArray(data.deals) || !Array.isArray(data.tasks))
+          throw new Error('bad shape');
+        store.data = data;
+        store.load(); // normalizes any missing collections, then saves
+        toast(t('Data imported'));
+        render();
+      } catch (err) {
+        alert(t('That file is not a valid Nexus ERP export.'));
+      }
+      e.target.value = '';
+    };
+    reader.readAsText(file);
+  });
+}
+
+/* ---------------- Router ---------------- */
+
+let currentView = 'dashboard';
+
+function render() {
+  if (App.views[currentView]) App.views[currentView]();
+}
+
+function switchView(name) {
+  currentView = name;
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+  document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
+  const section = $(`#view-${name}`);
+  if (section) section.classList.remove('hidden');
+  if (location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
+  render();
+}
+
+function bindNav() {
+  document.querySelectorAll('.nav-item').forEach(b => { b.onclick = () => switchView(b.dataset.view); });
+  window.addEventListener('hashchange', () => {
+    const v = location.hash.slice(1);
+    if (App.views[v] && v !== currentView) switchView(v);
+  });
+}

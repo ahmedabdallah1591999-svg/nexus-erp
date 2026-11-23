@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nexus ERP</title>
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">N</span>
+      <span class="brand-name">Nexus ERP</span>
+    </div>
+    <nav class="nav">
+      <div class="nav-section" data-i18n="Overview">Overview</div>
+      <button class="nav-item active" data-view="dashboard"><span class="ico">▦</span> <span data-i18n="Dashboard">Dashboard</span></button>
+      <div class="nav-section" data-i18n="CRM">CRM</div>
+      <button class="nav-item" data-view="contacts"><span class="ico">👤</span> <span data-i18n="Contacts">Contacts</span></button>
+      <button class="nav-item" data-view="companies"><span class="ico">🏢</span> <span data-i18n="Companies">Companies</span></button>
+      <button class="nav-item" data-view="deals"><span class="ico">💼</span> <span data-i18n="Deals">Deals</span></button>
+      <button class="nav-item" data-view="tasks"><span class="ico">✓</span> <span data-i18n="Tasks">Tasks</span></button>
+      <div class="nav-section" data-i18n="Operations">Operations</div>
+      <button class="nav-item" data-view="invoices"><span class="ico">🧾</span> <span data-i18n="Invoices">Invoices</span></button>
+      <button class="nav-item" data-view="products"><span class="ico">📦</span> <span data-i18n="Inventory">Inventory</span></button>
+      <button class="nav-item" data-view="purchases"><span class="ico">🛒</span> <span data-i18n="Purchases">Purchases</span></button>
+      <button class="nav-item" data-view="suppliers"><span class="ico">🚚</span> <span data-i18n="Suppliers">Suppliers</span></button>
+      <div class="nav-section" data-i18n="Back office">Back office</div>
+      <button class="nav-item" data-view="finance"><span class="ico">💰</span> <span data-i18n="Finance">Finance</span></button>
+      <button class="nav-item" data-view="employees"><span class="ico">🧑‍🤝‍🧑</span> <span data-i18n="Employees">Employees</span></button>
+      <button class="nav-item" data-view="reports"><span class="ico">📈</span> <span data-i18n="Reports">Reports</span></button>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="lang-switch" role="group" aria-label="Language">
+        <button data-lang="en" class="lang-btn active">EN</button>
+        <button data-lang="ar" class="lang-btn">ع</button>
+        <button data-lang="de" class="lang-btn">DE</button>
+      </div>
+      <button id="exportBtn" class="ghost-btn" data-i18n-title="Download all data as JSON" title="Download all data as JSON">⬇ <span data-i18n="Export data">Export data</span></button>
+      <label class="ghost-btn" data-i18n-title="Restore from a JSON export" title="Restore from a JSON export">⬆ <span data-i18n="Import">Import</span><input type="file" id="importInput" accept="application/json" hidden></label>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="search-wrap">
+        <input id="globalSearch" type="search" data-i18n-ph="Search contacts, companies, deals…" placeholder="Search contacts, companies, deals…" autocomplete="off">
+        <div id="searchResults" class="search-results hidden"></div>
+      </div>
+      <button id="quickAddBtn" class="primary-btn">+ <span data-i18n="New">New</span></button>
+    </header>
+
+    <section id="view-dashboard" class="view"></section>
+    <section id="view-contacts" class="view hidden"></section>
+    <section id="view-companies" class="view hidden"></section>
+    <section id="view-deals" class="view hidden"></section>
+    <section id="view-tasks" class="view hidden"></section>
+    <section id="view-invoices" class="view hidden"></section>
+    <section id="view-products" class="view hidden"></section>
+    <section id="view-purchases" class="view hidden"></section>
+    <section id="view-suppliers" class="view hidden"></section>
+    <section id="view-finance" class="view hidden"></section>
+    <section id="view-employees" class="view hidden"></section>
+    <section id="view-reports" class="view hidden"></section>
+  </main>
+</div>
+
+<div id="modalBackdrop" class="modal-backdrop hidden">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <h3 id="modalTitle"></h3>
+      <button id="modalClose" class="icon-btn" title="Close">✕</button>
+    </div>
+    <form id="modalForm" class="modal-body"></form>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="i18n.js"></script>
+<script src="core.js"></script>
+<script src="seed.js"></script>
+<script src="crm.js"></script>
+<script src="sales.js"></script>
+<script src="finance.js"></script>
+<script src="dashboard.js"></script>
+<script src="boot.js"></script>
+</body>
+</html>
