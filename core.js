@@ -52,6 +52,13 @@ const store = {
       if (typeof toast === 'function') toast(t('Could not save data. Browser storage is full.'));
     }
   },
+  // Adopt an imported data object: normalize missing collections, then persist.
+  adopt(data) {
+    this.data = data;
+    if (!this.data || !this.data.meta) this.data = seedData();
+    for (const key of Object.keys(emptyData())) if (!this.data[key]) this.data[key] = emptyData()[key];
+    this.save();
+  },
   add(coll, row) {
     row.id = this.data.meta.nextId++;
     row.created_at = row.created_at || new Date().toISOString();
@@ -269,8 +276,7 @@ function bindExportImport() {
         if (!data || !data.meta || !Array.isArray(data.contacts) || !Array.isArray(data.companies)
           || !Array.isArray(data.deals) || !Array.isArray(data.tasks))
           throw new Error('bad shape');
-        store.data = data;
-        store.load(); // normalizes any missing collections, then saves
+        store.adopt(data); // normalize missing collections, then persist (never re-read storage here)
         toast(t('Data imported'));
         render();
       } catch (err) {
