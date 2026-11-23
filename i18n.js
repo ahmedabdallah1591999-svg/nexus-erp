@@ -3,7 +3,9 @@
    Keys are the English source strings; t(key) falls back to the key. */
 
 const LANG_KEY = 'nexus-erp-lang';
-let currentLang = 'en';
+const LANG_EXPLICIT_KEY = 'nexus-erp-lang-explicit';
+const DEFAULT_LANG = 'ar';
+let currentLang = DEFAULT_LANG;
 
 const I18N = {
 en: {}, // English is the key itself
@@ -22,7 +24,7 @@ ar: {
   'Purchases':'المشتريات','Payroll':'الرواتب','Rent':'الإيجار','Utilities':'المرافق','Marketing':'التسويق','Operations':'التشغيل','Other':'أخرى','Sales':'المبيعات','Services':'الخدمات','Other income':'إيرادات أخرى',
   'Full name':'الاسم الكامل','Department':'القسم','Monthly salary (USD)':'الراتب الشهري (دولار)','Hire date':'تاريخ التعيين','Edit employee':'تعديل الموظف','New employee':'موظف جديد','Employee updated':'تم تحديث الموظف','Employee added':'تمت إضافة الموظف','Payroll for this month is already posted.':'رواتب هذا الشهر مرحّلة بالفعل.','No active employees.':'لا يوجد موظفون نشطون.','Post payroll for {month}?':'ترحيل رواتب {month}؟','active employees':'موظف نشط','total':'الإجمالي','This adds one expense entry per employee to the ledger.':'سيضيف هذا قيد مصروف لكل موظف في الدفتر.','Payroll posted':'تم ترحيل الرواتب','monthly payroll':'الرواتب الشهرية','Run payroll':'ترحيل الرواتب','Employee':'الموظف','Salary':'الراتب','Hired':'التعيين','No employees yet.':'لا يوجد موظفون بعد.','employee':'الموظف','Employee deleted':'تم حذف الموظف',
   'Reports':'التقارير','Across sales, pipeline, products and spending':'عبر المبيعات والصفقات والمنتجات والمصروفات','Win rate':'معدل الفوز','lost':'مفقودة','Revenue (paid invoices)':'الإيرادات (الفواتير المدفوعة)','Stock value (at cost)':'قيمة المخزون (بالتكلفة)','Monthly payroll':'الرواتب الشهرية','Sales by month (paid invoices)':'المبيعات شهرياً (الفواتير المدفوعة)','No paid invoices yet.':'لا توجد فواتير مدفوعة بعد.','Deal pipeline':'مسار الصفقات','Top products by units sold':'أعلى المنتجات مبيعاً بالوحدات','sold':'مبيعاً','No sales yet.':'لا توجد مبيعات بعد.','Expenses by category':'المصروفات حسب الفئة','No expenses yet.':'لا توجد مصروفات بعد.','Custom line':'بند مخصص',
-  'Cancel':'إلغاء','Save':'حفظ','Delete {item}? This cannot be undone.':'حذف {item}؟ لا يمكن التراجع عن هذا.','No date':'بدون تاريخ','Due today':'يستحق اليوم','Due tomorrow':'يستحق غداً','Due':'يستحق','just now':'الآن','m ago':'د مضت','h ago':'س مضت','d ago':'ي مضت','yesterday':'أمس','Data exported':'تم تصدير البيانات','Data imported':'تم استيراد البيانات','That file is not a valid Nexus ERP export.':'هذا الملف ليس تصديراً صالحاً من Nexus ERP.','No matches.':'لا توجد نتائج.','Deal':'صفقة','Invoice':'فاتورة','stock':'المخزون','Could not save data. Browser storage is full.':'تعذر حفظ البيانات. مساحة التخزين ممتلئة.',
+  'Cancel':'إلغاء','Save':'حفظ','Delete {item}? This cannot be undone.':'حذف {item}؟ لا يمكن التراجع عن هذا.','No date':'بدون تاريخ','Due today':'يستحق اليوم','Due tomorrow':'يستحق غداً','Due':'يستحق','just now':'الآن','m ago':'د مضت','h ago':'س مضت','d ago':'ي مضت','yesterday':'أمس','Data exported':'تم تصدير البيانات','Data imported':'تم استيراد البيانات','That file is not a valid Nexus ERP export.':'هذا الملف ليس تصديراً صالحاً من Nexus ERP.','No matches.':'لا توجد نتائج.','Deal':'صفقة','Invoice':'فاتورة','stock':'المخزون','Could not save data. Browser storage is full.':'تعذر حفظ البيانات. مساحة التخزين ممتلئة.','Language':'اللغة',
 },
 de: {
   'Overview':'Übersicht','CRM':'CRM','Operations':'Betrieb','Back office':'Backoffice','Dashboard':'Dashboard','Contacts':'Kontakte','Companies':'Unternehmen','Deals':'Geschäfte','Tasks':'Aufgaben','Invoices':'Rechnungen','Inventory':'Lager','Purchases':'Einkauf','Suppliers':'Lieferanten','Finance':'Finanzen','Employees':'Mitarbeiter','Reports':'Berichte','New':'Neu','Export data':'Daten exportieren','Import':'Importieren','Download all data as JSON':'Alle Daten als JSON herunterladen','Restore from a JSON export':'Aus JSON-Export wiederherstellen','Search contacts, companies, deals…':'Kontakte, Unternehmen, Geschäfte suchen…',
@@ -39,7 +41,7 @@ de: {
   'Purchases':'Einkauf','Payroll':'Gehälter','Rent':'Miete','Utilities':'Nebenkosten','Marketing':'Marketing','Operations':'Betrieb','Other':'Sonstiges','Sales':'Verkäufe','Services':'Dienstleistungen','Other income':'Sonstige Einnahmen',
   'Full name':'Vollständiger Name','Department':'Abteilung','Monthly salary (USD)':'Monatsgehalt (USD)','Hire date':'Einstellungsdatum','Edit employee':'Mitarbeiter bearbeiten','New employee':'Neuer Mitarbeiter','Employee updated':'Mitarbeiter aktualisiert','Employee added':'Mitarbeiter hinzugefügt','Payroll for this month is already posted.':'Gehälter für diesen Monat sind bereits gebucht.','No active employees.':'Keine aktiven Mitarbeiter.','Post payroll for {month}?':'Gehälter für {month} buchen?','active employees':'aktive Mitarbeiter','total':'gesamt','This adds one expense entry per employee to the ledger.':'Dies bucht eine Ausgabe pro Mitarbeiter.','Payroll posted':'Gehälter gebucht','monthly payroll':'Monatsgehälter','Run payroll':'Gehälter buchen','Employee':'Mitarbeiter','Salary':'Gehalt','Hired':'Eingestellt','No employees yet.':'Noch keine Mitarbeiter.','employee':'Mitarbeiter','Employee deleted':'Mitarbeiter gelöscht',
   'Across sales, pipeline, products and spending':'Über Verkäufe, Pipeline, Produkte und Ausgaben','Win rate':'Erfolgsquote','lost':'verloren','Revenue (paid invoices)':'Umsatz (bezahlte Rechnungen)','Stock value (at cost)':'Lagerwert (zu Kosten)','Monthly payroll':'Monatsgehälter','Sales by month (paid invoices)':'Verkäufe pro Monat (bezahlte Rechnungen)','No paid invoices yet.':'Noch keine bezahlten Rechnungen.','Deal pipeline':'Geschäftspipeline','Top products by units sold':'Top-Produkte nach verkauften Einheiten','sold':'verkauft','No sales yet.':'Noch keine Verkäufe.','Expenses by category':'Ausgaben nach Kategorie','No expenses yet.':'Noch keine Ausgaben.','Custom line':'Eigene Position',
-  'Cancel':'Abbrechen','Save':'Speichern','Delete {item}? This cannot be undone.':'{item} löschen? Dies kann nicht rückgängig gemacht werden.','No date':'Kein Datum','Due today':'Heute fällig','Due tomorrow':'Morgen fällig','Due':'Fällig','just now':'gerade eben','m ago':' Min.','h ago':' Std.','d ago':' T.','yesterday':'gestern','Data exported':'Daten exportiert','Data imported':'Daten importiert','That file is not a valid Nexus ERP export.':'Diese Datei ist kein gültiger Nexus-ERP-Export.','No matches.':'Keine Treffer.','Deal':'Geschäft','stock':'Bestand','Could not save data. Browser storage is full.':'Daten konnten nicht gespeichert werden. Speicher voll.',
+  'Cancel':'Abbrechen','Save':'Speichern','Delete {item}? This cannot be undone.':'{item} löschen? Dies kann nicht rückgängig gemacht werden.','No date':'Kein Datum','Due today':'Heute fällig','Due tomorrow':'Morgen fällig','Due':'Fällig','just now':'gerade eben','m ago':' Min.','h ago':' Std.','d ago':' T.','yesterday':'gestern','Data exported':'Daten exportiert','Data imported':'Daten importiert','That file is not a valid Nexus ERP export.':'Diese Datei ist kein gültiger Nexus-ERP-Export.','No matches.':'Keine Treffer.','Deal':'Geschäft','stock':'Bestand','Could not save data. Browser storage is full.':'Daten konnten nicht gespeichert werden. Speicher voll.','Language':'Sprache',
 },
 };
 
@@ -58,19 +60,29 @@ function applyStaticTranslations() {
   document.querySelectorAll('[data-i18n-title]').forEach(el => { el.title = t(el.dataset.i18nTitle); });
 }
 
-function setLang(lang) {
+function setLang(lang, explicit) {
   if (!I18N[lang] && lang !== 'en') return;
   currentLang = lang;
-  localStorage.setItem(LANG_KEY, lang);
+  if (explicit) {
+    localStorage.setItem(LANG_KEY, lang);
+    localStorage.setItem(LANG_EXPLICIT_KEY, '1');
+  }
   document.documentElement.lang = lang;
   document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
-  document.querySelectorAll('.lang-btn').forEach(b => b.classList.toggle('active', b.dataset.lang === lang));
+  document.querySelectorAll('.lang-btn, .lang-btn-top').forEach(b => b.classList.toggle('active', b.dataset.lang === lang));
   applyStaticTranslations();
   render();
 }
 
 function initI18n() {
+  document.querySelectorAll('.lang-btn, .lang-btn-top').forEach(b => { b.onclick = () => setLang(b.dataset.lang, true); });
   const saved = localStorage.getItem(LANG_KEY);
-  document.querySelectorAll('.lang-btn').forEach(b => { b.onclick = () => setLang(b.dataset.lang); });
-  setLang(saved === 'ar' || saved === 'de' ? saved : 'en');
+  const explicit = localStorage.getItem(LANG_EXPLICIT_KEY) === '1';
+  let lang = DEFAULT_LANG;
+  if (explicit && (saved === 'en' || saved === 'ar' || saved === 'de')) {
+    lang = saved;
+  } else if ((navigator.language || '').toLowerCase().indexOf('de') === 0) {
+    lang = 'de';
+  }
+  setLang(lang, false);
 }

@@ -69,9 +69,18 @@ h1, h2, h3 { margin: 0; }
 .sidebar-foot { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.08); }
 .nav-section { font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; color: #64748b; padding: 14px 12px 4px; }
 .lang-switch { display: flex; gap: 4px; margin-bottom: 4px; }
-.lang-btn { flex: 1; background: none; border: 1px solid rgba(255,255,255,.18); color: #cbd5e1; border-radius: 7px; padding: 5px 0; font-size: 12px; }
+.lang-btn { flex: 1; background: none; border: 1px solid rgba(255,255,255,.18); color: #cbd5e1; border-radius: 7px; padding: 6px 0; font-size: 11px; }
 .lang-btn:hover { background: rgba(255,255,255,.07); color: #fff; }
 .lang-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.lang-caption { font-size: 11px; color: #94a3b8; padding: 0 2px 2px; }
+.lang-switch-top { display: flex; align-items: center; gap: 6px; margin-inline-start: auto; }
+.lang-caption-top { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.lang-btn-top {
+  background: var(--panel); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 8px; padding: 8px 12px; font-size: 13px; box-shadow: var(--shadow);
+}
+.lang-btn-top:hover { border-color: var(--accent); }
+.lang-btn-top.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .head-actions { display: flex; gap: 8px; }
 .lines-head { display: flex; align-items: center; justify-content: space-between; margin: 16px 0 6px; }
 .lines-head h4 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
@@ -259,6 +268,14 @@ table.data tbody tr:hover { background: #f8f9ff; }
 @media (max-width: 760px) {
   .sidebar { width: 64px; flex-basis: 64px; padding: 14px 8px; }
   .brand-name, .nav-item span:not(.ico), .sidebar-foot { display: none; }
+  .nav-section { display: none; }
+  .nav-item { justify-content: center; padding: 9px 0; }
   .main { padding: 14px; }
+  .topbar { flex-wrap: wrap; gap: 10px; }
+  .search-wrap { flex: 1 1 100%; max-width: none; order: 1; }
+  .lang-switch-top { order: 2; margin-inline-start: 0; flex: 1; }
+  .lang-btn-top { flex: 1; padding: 10px 4px; text-align: center; }
+  .lang-caption-top { display: none; }
+  #quickAddBtn { order: 3; }
   .form-grid { grid-template-columns: 1fr; }
 }
