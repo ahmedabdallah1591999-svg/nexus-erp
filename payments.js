@@ -69,11 +69,15 @@ function recordPayment({ direction, contact_id, supplier_id, ref_type, ref_id, a
     if (invoiceOpenAmount(inv) <= 0.005) {
       inv.status = 'paid';
       if (!inv.ledger_posted) {
-        store.add('ledger', {
+        /* the simple ledger is the cash view: the part settled with a customer credit is not new money
+           (the cash came in when the credit was created), so it is left out here, never counted twice */
+        const credited = Math.round(((store.data.payments || []).filter(x => x.ref_type === 'invoice' && x.ref_id === inv.id && x.method === 'store_credit' && x.direction === 'in').reduce((s, x) => s + num(x.amount), 0) + (method === 'store_credit' ? amount : 0)) * 100) / 100;
+        const cashPart = Math.round((invoiceTotal(inv) - credited) * 100) / 100;
+        if (cashPart > 0.005) store.add('ledger', {
           date: todayStr(), type: 'income', category: 'Sales',
-          amount: Math.round(invoiceTotal(inv) * 100) / 100,
+          amount: cashPart,
           ref_type: 'invoice', ref_id: inv.id,
-          memo: `Payment received for ${inv.number}`,
+          memo: `Payment received for ${inv.number}` + (credited > 0 ? ` (${credited.toFixed(2)} settled by customer credit, non-cash, not counted)` : ''),
         });
         inv.ledger_posted = true;
       }

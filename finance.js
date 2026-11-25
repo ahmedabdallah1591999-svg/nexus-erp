@@ -399,12 +399,15 @@ function cashMovementReport(from, to) {
   const expenses = accNet(['5000', '5200', '6000', '6100', '6200', '6900'], 1);
   const ni = Math.round((revenue - expenses) * 100) / 100;
 
+  const ledgerKind = new Map((store.data.ledger || []).map(l => [l.id, l.ref_type]));
   const bucketDefs = [
     { key: 'collections', match: (j, d) => j.ref_type === 'payment' && d > 0 },
     /* money out to suppliers and refunds to customers (POS refund, confirmed credit-note / order-return refund), net of
        refunds received back from a supplier (purchase return with a confirmed refund). Credit applications never touch cash/bank. */
     { key: 'payouts', match: (j, d) => ((j.ref_type === 'payment' || j.ref_type === 'pos-refund' || j.ref_type === 'credit_note' || j.ref_type === 'return') && d < 0) || (j.ref_type === 'purchase_return' && d > 0) },
-    { key: 'expenses_paid', match: (j, d) => j.ref_type === 'expense' && d < 0 },
+    /* an approved expense posts a journal of type 'ledger' that points at its ledger entry (ref_type 'expense');
+       manual ledger entries (no ref_type) stay unclassified on purpose */
+    { key: 'expenses_paid', match: (j, d) => d < 0 && (j.ref_type === 'expense' || (j.ref_type === 'ledger' && ledgerKind.get(j.ref_id) === 'expense')) },
     { key: 'payroll_paid', match: (j, d) => j.ref_type === 'payroll' && d < 0 },
     { key: 'asset_investing', match: (j, d) => (j.ref_type === 'asset' || j.ref_type === 'asset-dispose') && d !== 0 },
     { key: 'internal_transfer', match: (j, d) => j.ref_type === 'reclass' },

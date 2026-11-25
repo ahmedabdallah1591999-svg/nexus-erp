@@ -1391,7 +1391,7 @@ const OPS = {
         lines: orig[0].lines.map(l => ({ account_id: l.account_id, debit: l.credit, credit: l.debit })) }), 'reversal could not be posted');
       const stockItems = (pr.items || []).filter(it => it.product_id != null).map(it => ({ product_id: it.product_id, qty: it.qty }));
       if (stockItems.length) ctx.applyStock(stockItems, +1, { reason: 'purchase-return-void', ref_type: 'purchase_return', ref_id: pr.id });
-      S.add('ledger', { date: ctx.todayStr(), type: 'expense', category: 'Purchase return void', amount: r2(ctx.num(pr.total)), ref_type: 'purchase_return', ref_id: pr.id, memo: `${pr.number} voided` });
+      if (r2(ctx.num(pr.total) - ctx.num(pr.store_credit)) > 0.005) S.add('ledger', { date: ctx.todayStr(), type: 'expense', category: 'Purchase return void', amount: r2(ctx.num(pr.total) - ctx.num(pr.store_credit)), ref_type: 'purchase_return', ref_id: pr.id, memo: `${pr.number} voided` });
       po.returned_amount = Math.max(0, r2(ctx.num(po.returned_amount) - ctx.num(pr.total)));
       if (sc) Object.assign(sc, { status: 'void', remaining: 0 });
       Object.assign(pr, { status: 'void', void_reason: String(p.reason).trim(), voided_by: user.username, voided_at: new Date().toISOString() });
@@ -1519,7 +1519,7 @@ const OPS = {
       if (toAP > 0.005) lines.push({ account_id: ctx.accountByCode('2000').id, debit: toAP });
       if (excess > 0.005) lines.push({ account_id: asCredit ? ctx.accountByCode('1150').id : ctx.settlementAccountId(method), debit: excess });
       need(ctx.postJournal({ date, memo: `Purchase return ${number} (${po.number})`, ref_type: 'purchase_return', ref_id: pr.id, lines }), 'purchase return could not be posted');
-      S.add('ledger', { date, type: 'income', category: 'Purchase return', amount: total, ref_type: 'purchase_return', ref_id: pr.id, memo: `${number} returned to supplier` });
+      if (total - (asCredit ? excess : 0) > 0.005) S.add('ledger', { date, type: 'income', category: 'Purchase return', amount: r2(total - (asCredit ? excess : 0)), ref_type: 'purchase_return', ref_id: pr.id, memo: `${number} returned to supplier` });
       if (asCredit) { S.data.supplier_credits = S.data.supplier_credits || []; S.add('supplier_credits', { supplier_id: po.supplier_id, purchase_return_id: pr.id, number: `SC-${String(pr.id).padStart(4, '0')}`, date, amount: excess, remaining: excess, status: 'open', applications: [] }); }
       po.returned_amount = r2(ctx.num(po.returned_amount) + total);
       S.save();

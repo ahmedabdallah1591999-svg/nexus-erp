@@ -49,6 +49,11 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   console.log('AUTH:' + auth);
   const res = await evalJs("JSON.stringify([cashMovementReport(" + JSON.stringify(process.argv[7]) + "," + JSON.stringify(process.argv[8]) + "), (typeof cashAccrualCard==='function')])");
   console.log('REPORT:' + res);
+  if (process.argv[9]) {
+    const b64 = await evalJs("(async () => { const b = await buildExcelBlob(); const buf = await new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(b); }); return buf.split(',')[1]; })()");
+    if (typeof b64 === 'string' && !b64.startsWith('EXC:')) { fs.writeFileSync(process.argv[9], Buffer.from(b64, 'base64')); console.log('XLSX_OK'); } else console.log('XLSX_FAIL ' + b64);
+    console.log('TOTALS:' + await evalJs("JSON.stringify(monthTotals(monthStr()))"));
+  }
   const html = await evalJs("(() => { switchView('finance'); return 'ok'; })()"); await sleep(1500);
   const txt = await evalJs("document.querySelector('#view-finance') ? document.querySelector('#view-finance').innerText.length : -1");
   console.log('FINANCE_TEXT_LEN:' + txt);

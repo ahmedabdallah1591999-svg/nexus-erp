@@ -60,3 +60,6 @@ hotfix16: supplier credit balances (account 1150, supplier-credit-apply, void ru
 
 ## hotfix16b
 - Credit-application rows labeled non-cash (UI, Excel). Apply modal default capped to min(credit remaining, open amount). Cash report: refunds no longer unclassified. New tests: V1-V7, cash-test, mig-test.
+
+## hotfix16c
+- Simple ledger: credit-settled invoice part and supplier-credit returns no longer counted as income. Cash report: approved expenses now land in Expenses paid. cash-test: real expense approve, real reclass, real Excel check.
