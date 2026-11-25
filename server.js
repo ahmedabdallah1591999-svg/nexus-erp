@@ -47,6 +47,7 @@ const COLLECTION_VIEW = {
   tickets: 'helpdesk', ticket_replies: 'helpdesk',
   leave_requests: ['employees', 'hr-self'], attendance: ['employees', 'hr-self'],
   assets: 'assets',
+  pos_shifts: 'pos',
   activities: 'contacts', products: 'products', suppliers: 'suppliers',
   invoices: 'invoices', purchases: 'purchases', ledger: 'finance', expenses: ['finance', 'expenses'], recurring: 'invoices',
   employees: 'employees', notes: 'notes', accounts: 'accounting', journal: 'accounting', payments: 'payments',
@@ -62,7 +63,7 @@ function emptyDb() {
     data: {
       meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1, orderSeq: 1, returnSeq: 1, ticketSeq: 1 },
       companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [], projects: [], timesheets: [], tickets: [], ticket_replies: [],
-      leave_requests: [], attendance: [], assets: [],
+      leave_requests: [], attendance: [], assets: [], pos_shifts: [],
       products: [], suppliers: [], invoices: [], purchases: [], sales_orders: [], returns: [], recurring: [],
       ledger: [], expenses: [], employees: [], notes: [], messages: [], accounts: [], journal: [], payments: [],
       warehouses: [], stock_moves: [], settings: {},

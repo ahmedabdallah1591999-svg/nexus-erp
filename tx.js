@@ -29,7 +29,7 @@ const MODULE_FILES = ['i18n.js', 'i18n-extra.js', 'core.js', 'seed.js', 'crm.js'
 /* Collections only the server may write (never accepted from a client PUT). */
 const SERVER_OWNED = new Set(['accounts', 'journal', 'payments', 'warehouses', 'stock_moves',
   'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring', 'expenses', 'projects', 'timesheets',
-  'tickets', 'ticket_replies', 'leave_requests', 'attendance', 'assets']);
+  'tickets', 'ticket_replies', 'leave_requests', 'attendance', 'assets', 'pos_shifts']);
 
 /* ---------------- browser sandbox ---------------- */
 
@@ -1110,7 +1110,7 @@ const OPS = {
         need(a, 'asset not found');
         /* financial terms are locked once depreciation has run — changing
            them retroactively would rewrite posted journal history */
-        need(!a.depr_through, 'depreciation already posted: financial terms are locked');
+        need(!a.depr_through && !a.opening_recognized, 'depreciation already posted: financial terms are locked');
         need(a.status === 'active', 'a disposed asset cannot be edited');
         Object.assign(a, {
           name: String(out.name).trim(), category: String(out.category || ''),
@@ -1151,8 +1151,14 @@ const OPS = {
       const month = p.month;
       let posted = 0;
       const details = [];
+      let skipped_unrecognized = 0;
       for (const a of (S.data.assets || [])) {
         if (a.status !== 'active') continue;
+        /* a register-only asset was never recognized on the balance sheet:
+           no GL depreciation may post against it. Its register row keeps a
+           visibly separate tracking-only figure until an admin runs an
+           explicit opening recognition. */
+        if (!a.acquisition_posted && !a.opening_recognized) { skipped_unrecognized++; continue; }
         const purchaseMonth = (a.purchase_date || '').slice(0, 7);
         if (!purchaseMonth || month <= purchaseMonth) continue;
         if (a.depr_through && month <= a.depr_through) continue;
@@ -1164,7 +1170,7 @@ const OPS = {
         while (cur < month && guard++ < 60) {
           const [y, m] = cur.split('-').map(Number);
           cur = `${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, '0')}`;
-          const accum = ctx.accumDepr(a.id);
+          const accum = ctx.accumDepr(a.id) + ctx.num(a.opening_accum);
           if (accum + monthly > a.cost - a.salvage + 0.005) { a.depr_through = cur; continue; }
           ctx.postJournal({
             date: `${cur}-28`, memo: `Depreciation ${cur} - ${a.name}`, ref_type: 'asset-depr', ref_id: a.id,
@@ -1178,9 +1184,9 @@ const OPS = {
         }
         details.push(`${a.name}: ${a.depr_through}`);
       }
-      need(posted > 0, 'nothing to post for this month');
+      need(posted > 0 || skipped_unrecognized > 0, 'nothing to post for this month');
       S.save();
-      return { posted, details };
+      return { posted, details, skipped_unrecognized };
     },
   },
   'asset-dispose': {
@@ -1193,8 +1199,20 @@ const OPS = {
       need(/^\d{4}-\d{2}-\d{2}$/.test(p.date || ''), 'disposal date required');
       const proceeds = Math.round(ctx.num(p.proceeds) * 100) / 100;
       need(proceeds >= 0, 'proceeds must not be negative');
-      /* only depreciation actually posted to the books is reversed out */
-      const accum = Math.round(ctx.accumDepr(a.id) * 100) / 100;
+      const recognized = !!(a.acquisition_posted || a.opening_recognized);
+      if (!recognized) {
+        /* never recognized on the balance sheet: disposal is register-only.
+           No GL entry at all — not even proceeds — because there is no
+           recognized cost basis to clear. Recognize the asset first if it
+           belongs in the books. Proceeds stay a memo on the register row. */
+        a.status = 'disposed';
+        a.disposed_date = p.date;
+        a.proceeds = proceeds;
+        S.save();
+        return { asset: a, gl_posted: false };
+      }
+      /* depreciation reversed out = opening recognition + posted monthly runs */
+      const accum = Math.round((ctx.accumDepr(a.id) + ctx.num(a.opening_accum)) * 100) / 100;
       const book = Math.round((a.cost - accum) * 100) / 100;
       const lines = [
         { account_id: ctx.accountByCode('1590').id, debit: accum },
@@ -1204,18 +1222,44 @@ const OPS = {
       const diff = Math.round((proceeds - book) * 100) / 100;
       if (diff > 0) lines.push({ account_id: ctx.accountByCode('7100').id, credit: diff });
       if (diff < 0) lines.push({ account_id: ctx.accountByCode('6900').id, debit: -diff });
-      /* an unposted acquisition (register-only asset) has nothing in 1500 to
-         clear — skip the asset-account legs in that case */
-      const jl = a.acquisition_posted ? lines : lines.filter(l => {
-        const code = ctx.accountCode ? ctx.accountCode(l.account_id) : null;
-        return code !== '1500' && code !== '1590';
-      });
-      ctx.postJournal({ date: p.date, memo: `Disposal - ${a.name}`, ref_type: 'asset-dispose', ref_id: a.id, lines: jl });
+      ctx.postJournal({ date: p.date, memo: `Disposal - ${a.name}`, ref_type: 'asset-dispose', ref_id: a.id, lines });
       a.status = 'disposed';
       a.disposed_date = p.date;
       a.proceeds = proceeds;
       S.save();
-      return { asset: a, book_value: book, gain_loss: diff };
+      return { asset: a, gl_posted: true, book_value: book, gain_loss: diff };
+    },
+  },
+  'asset-recognize': {
+    view: 'assets',
+    run(ctx, p, user) {
+      /* explicit opening recognition: brings a register-only asset onto the
+         balance sheet at cost, with its accumulated depreciation so far
+         against equity. This is an accounting decision, so it is an
+         admin-only, deliberately-invoked event — never inferred. */
+      need(user.role === 'admin', 'only an admin can recognize an asset in the books');
+      const S = ctx.store;
+      const a = (S.data.assets || []).find(x => x.id === Number(p.id));
+      need(a, 'asset not found');
+      need(a.status === 'active', 'a disposed asset cannot be recognized');
+      need(!a.acquisition_posted && !a.opening_recognized, 'asset is already recognized in the books');
+      const oa = Math.round(ctx.num(p.opening_accum) * 100) / 100;
+      need(oa >= 0 && oa <= a.cost - a.salvage + 0.005, 'opening accumulated depreciation out of range');
+      need(/^\d{4}-\d{2}-\d{2}$/.test(p.date || ''), 'recognition date required');
+      const net = Math.round((a.cost - oa) * 100) / 100;
+      const lines = [{ account_id: ctx.accountByCode('1500').id, debit: a.cost }];
+      if (oa > 0) lines.push({ account_id: ctx.accountByCode('1590').id, credit: oa });
+      if (net > 0) lines.push({ account_id: ctx.accountByCode('3000').id, credit: net });
+      ctx.postJournal({ date: p.date, memo: `Opening recognition - ${a.name}`, ref_type: 'asset-recognize', ref_id: a.id, lines });
+      a.opening_recognized = true;
+      a.opening_accum = oa;
+      a.recognized_date = p.date;
+      a.recognized_by = user.username;
+      /* monthly posting resumes after the recognition month: opening
+         accumulated covers everything before it */
+      a.depr_through = p.date.slice(0, 7);
+      S.save();
+      return { asset: a };
     },
   },
   'asset-delete': {
@@ -1224,11 +1268,90 @@ const OPS = {
       const S = ctx.store;
       const a = (S.data.assets || []).find(x => x.id === Number(p.id));
       need(a, 'asset not found');
-      need(!a.depr_through && !a.acquisition_posted && a.status === 'active', 'an asset with posted history stays in the register');
+      need(!a.depr_through && !a.acquisition_posted && !a.opening_recognized && a.status === 'active', 'an asset with posted history stays in the register');
       need(user.role === 'admin' || a.created_by === user.username, 'only the creator or admin can delete');
       S.data.assets = S.data.assets.filter(x => x.id !== a.id);
       S.save();
       return { deleted: a.id };
+    },
+  },
+
+  /* ---------------- point of sale ---------------- */
+  'pos-sale': {
+    view: 'pos',
+    run(ctx, p, user) {
+      /* one explicit charge = sent invoice + payment + stock + journal in a
+         single serialized transaction. client_ref makes a double-tap or a
+         retried submission idempotent instead of a duplicate sale. */
+      const S = ctx.store;
+      const ref = String(p.client_ref || '').trim();
+      need(ref, 'client reference required');
+      const dup = (S.data.invoices || []).find(i => i.pos_ref === ref);
+      if (dup) return { invoice: dup, duplicate: true };
+      need(Array.isArray(p.items) && p.items.length > 0, 'items required');
+      for (const it of p.items) {
+        const prod = S.data.products.find(x => x.id === Number(it.product_id));
+        need(prod, 'unknown product');
+        need(ctx.num(it.qty) > 0, 'qty must be positive');
+        need(ctx.num(prod.stock) >= ctx.num(it.qty) - 0.0005, `Insufficient stock for ${prod.name}`);
+        it.price = ctx.num(prod.price); /* price comes from the catalog, never the till */
+      }
+      const shift = p.shift_id ? (S.data.pos_shifts || []).find(x => x.id === Number(p.shift_id) && x.status === 'open') : null;
+      need(!p.shift_id || shift, 'shift not open');
+      const method = ['cash', 'bank', 'transfer'].includes(p.method) ? p.method : 'cash';
+      const today = ctx.todayStr();
+      ctx.saveInvoice(null, {
+        status: 'sent', contact_id: null, deal_id: null,
+        issue_date: today, due_date: today, tax_rate: 0,
+        notes: 'POS', items: p.items.map(it => ({ product_id: Number(it.product_id), qty: ctx.num(it.qty), price: it.price })),
+      });
+      const inv = S.data.invoices[S.data.invoices.length - 1];
+      inv.pos_ref = ref;
+      /* a charge that cannot record its payment must fail loudly — never a
+         paid-looking sale with no receipt in the books */
+      need(ctx.recordPayment({
+        direction: 'in', ref_type: 'invoice', ref_id: inv.id,
+        amount: ctx.invoiceTotal(inv), method, date: today, memo: `POS ${inv.number}`,
+      }), 'payment could not be recorded');
+      if (shift) inv.pos_shift_id = shift.id;
+      if (shift) shift.sales_total = Math.round((ctx.num(shift.sales_total) + ctx.invoiceTotal(inv)) * 100) / 100;
+      S.save();
+      return { invoice: inv };
+    },
+  },
+  'pos-shift-open': {
+    view: 'pos',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      /* one open shift per cashier at a time */
+      need(!(S.data.pos_shifts || []).some(x => x.status === 'open' && x.cashier === user.username), 'you already have an open shift');
+      const row = S.add('pos_shifts', {
+        cashier: user.username, status: 'open', opened_at: new Date().toISOString(),
+        opening_float: Math.round(ctx.num(p.opening_float) * 100) / 100,
+        sales_total: 0, closed_at: null, counted_cash: null, variance: null,
+      });
+      S.save();
+      return { shift: row };
+    },
+  },
+  'pos-shift-close': {
+    view: 'pos',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const sh = (S.data.pos_shifts || []).find(x => x.id === Number(p.id));
+      need(sh, 'shift not found');
+      need(sh.status === 'open', 'shift already closed');
+      need(user.role === 'admin' || sh.cashier === user.username, 'only the cashier or admin can close it');
+      /* closing records the count and the variance; it never posts a
+         financial adjustment — a variance stays a review item, not a book
+         entry nobody approved */
+      const counted = Math.round(ctx.num(p.counted_cash) * 100) / 100;
+      sh.status = 'closed';
+      sh.closed_at = new Date().toISOString();
+      sh.counted_cash = counted;
+      sh.variance = Math.round((counted - (ctx.num(sh.opening_float) + ctx.num(sh.sales_total))) * 100) / 100;
+      S.save();
+      return { shift: sh };
     },
   },
 };
