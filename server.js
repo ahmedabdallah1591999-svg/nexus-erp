@@ -22,7 +22,12 @@
  * with HOST=0.0.0.0 (e.g. `HOST=0.0.0.0 node server.js`). That mode is
  * cleartext HTTP: use it only on a trusted network, and prefer HTTPS
  * (Tailscale Serve or a reverse proxy) before real credentials cross it.
- * First-run admin setup is accepted only from this machine, in every mode.
+ * First-run admin setup requires the one-time setup code printed to this
+ * console (and written to data/setup-code, readable only on this machine).
+ * Loopback alone is NOT the gate: a reverse proxy or Tailscale Serve on
+ * this machine forwards remote requests from 127.0.0.1, so only possession
+ * of the code proves the person is at the machine. The code is deleted
+ * once the admin exists.
  */
 
 const http = require('http');
@@ -200,6 +205,19 @@ function readBody(req) {
   });
 }
 
+/* First-run bootstrap code: generated per server start while no user
+   exists, written to DATA_DIR/setup-code (mode 600) and printed to the
+   console. Possession proves console/file access on this machine regardless
+   of bind address, reverse proxies, or spoofable client headers. */
+const SETUP_CODE_FILE = path.join(DATA_DIR, 'setup-code');
+let setupCode = null;
+function armSetupCode() {
+  if (db.users.length) { try { fs.unlinkSync(SETUP_CODE_FILE); } catch (e) {} setupCode = null; return; }
+  setupCode = crypto.randomBytes(5).toString('hex').toUpperCase();
+  try { fs.writeFileSync(SETUP_CODE_FILE, setupCode + '\n', { mode: 0o600 }); } catch (e) {}
+}
+const setupFails = new Map(); // ip -> {count, first} — same throttle shape as login
+
 function authUser(req) {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : '';
@@ -207,9 +225,9 @@ function authUser(req) {
   return username ? db.users.find(u => u.username === username) || null : null;
 }
 
-/* True only when the request arrived over loopback — used to keep first-run
-   admin setup claimable only from the machine itself, even when the server
-   is shared on the LAN with HOST=0.0.0.0. */
+/* True only when the request arrived over loopback. NOT used as the setup
+   gate: a same-host reverse proxy or Tailscale Serve forwards remote
+   requests from 127.0.0.1, so loopback proves nothing on its own. */
 function isLoopback(req) {
   const a = String((req.socket && req.socket.remoteAddress) || '');
   const v4 = a.startsWith('::ffff:') ? a.slice(7) : a;
@@ -222,16 +240,27 @@ const api = {
   'GET /api/ping': (req, res) => json(res, 200, { ok: true, server: true, needsSetup: db.users.length === 0 }),
 
   'POST /api/setup': async (req, res) => {
-    /* The installer sits at the machine: never allow a remote device to
-       claim the first admin account, whatever the bind address is. */
-    if (!isLoopback(req)) return json(res, 403, { error: 'setup is only allowed from this machine' });
-    if (db.users.length || api._setupBusy) return json(res, 409, { error: 'already set up' });
+    if (db.users.length) return json(res, 409, { error: 'already set up' });
+    const ip = (req.socket && req.socket.remoteAddress) || 'unknown';
+    const now = Date.now();
+    const rec = setupFails.get(ip) || { count: 0, first: now };
+    if (now - rec.first > 5 * 60 * 1000) { rec.count = 0; rec.first = now; }
+    if (rec.count >= 10) return json(res, 429, { error: 'too many attempts, wait a few minutes' });
+    if (api._setupBusy) return json(res, 409, { error: 'already set up' });
     api._setupBusy = true;
     try {
       const b = await readBody(req);
       /* Re-check AFTER the async body read: two simultaneous setup attempts
          must not both pass — only the first creates the admin. */
       if (db.users.length) return json(res, 409, { error: 'already set up' });
+      /* The bootstrap code is the ONLY gate: it proves console/file access
+         on this machine. Loopback does not — a local reverse proxy forwards
+         remote requests from 127.0.0.1 — and client headers are spoofable,
+         so they are never consulted here. */
+      if (!setupCode || String(b.code || '').trim().toUpperCase() !== setupCode) {
+        rec.count++; setupFails.set(ip, rec);
+        return json(res, 401, { error: 'setup code required' });
+      }
       const username = String(b.username || '').trim();
       const password = String(b.password || '');
       if (!username || password.length < 4) return json(res, 400, { error: 'invalid' });
@@ -241,6 +270,8 @@ const api = {
       mustChange: false, created_at: new Date().toISOString() };
       db.users.push(u);
       saveJson(DB_FILE, db);
+      try { fs.unlinkSync(SETUP_CODE_FILE); } catch (e) {}
+      setupCode = null;
       const token = crypto.randomBytes(24).toString('hex');
       sessions[token] = u.username; saveJson(SESSIONS_FILE, sessions);
       json(res, 200, { token, user: publicUser(u) });
@@ -437,6 +468,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+armSetupCode();
 server.listen(PORT, HOST, () => {
   console.log(`Nexus ERP local server — أحمد عبدالله بيزنس ديفيلوبمنت`);
   if (HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1') {
@@ -445,5 +477,9 @@ server.listen(PORT, HOST, () => {
   } else {
     console.log(`Running on http://${HOST}:${PORT} — reachable from the network (cleartext HTTP: trusted network only).`);
   }
-  console.log(db.users.length ? `${db.users.length} user account(s) on file.` : 'First run: create the admin account from THIS machine.');
+  if (db.users.length) console.log(`${db.users.length} user account(s) on file.`);
+  else {
+    console.log('First run: create the admin account from the browser.');
+    console.log(`Setup code (this machine only): ${setupCode}`);
+  }
 });

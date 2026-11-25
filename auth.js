@@ -124,8 +124,11 @@ const Auth = {
         if (p1.length < 4) { $('#setupError').textContent = t('Password is too short.'); $('#setupError').classList.remove('hidden'); return; }
         if (p1 !== p2) { $('#setupError').textContent = t('Passwords do not match.'); $('#setupError').classList.remove('hidden'); return; }
         if (window.Sync && Sync.mode === 'server') {
-          const okSetup = await this.serverSetup(username, p1);
-          if (!okSetup) { $('#setupError').textContent = t('Could not create the account on the server.'); $('#setupError').classList.remove('hidden'); return; }
+          const setupRes = await this.serverSetup(username, p1, $('#setupCode').value.trim());
+          if (setupRes !== true) {
+            $('#setupError').textContent = setupRes === 'setup code required' ? t('Wrong or missing setup code.') : t('Could not create the account on the server.');
+            $('#setupError').classList.remove('hidden'); return;
+          }
           afterLogin();
           return;
         }

@@ -117,10 +117,11 @@ const Sync = {
       location.reload();
     };
 
-    /* First-run admin setup against the server. */
-    Auth.serverSetup = async function (username, password) {
-      const r = await S.api('POST', '/api/setup', { username, password });
-      if (!r.ok) return false;
+    /* First-run admin setup against the server. Returns true, or the
+       server error string (e.g. 'setup code required'). */
+    Auth.serverSetup = async function (username, password, code) {
+      const r = await S.api('POST', '/api/setup', { username, password, code });
+      if (!r.ok) return (r.data && r.data.error) || false;
       S.token = r.data.token;
       sessionStorage.setItem('nexus-erp-server-token', S.token);
       S.serverUser = r.data.user;
