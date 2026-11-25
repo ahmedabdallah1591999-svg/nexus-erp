@@ -29,7 +29,7 @@ const MODULE_FILES = ['i18n.js', 'i18n-extra.js', 'core.js', 'seed.js', 'crm.js'
 /* Collections only the server may write (never accepted from a client PUT). */
 const SERVER_OWNED = new Set(['accounts', 'journal', 'payments', 'warehouses', 'stock_moves',
   'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring', 'expenses', 'projects', 'timesheets',
-  'tickets', 'ticket_replies']);
+  'tickets', 'ticket_replies', 'leave_requests', 'attendance']);
 
 /* ---------------- browser sandbox ---------------- */
 
@@ -957,6 +957,121 @@ const OPS = {
       S.data.ticket_replies = (S.data.ticket_replies || []).filter(r => r.ticket_id !== tk.id);
       S.save();
       return { deleted: tk.id };
+    },
+  },
+
+  /* ---------------- HR: time off + attendance ---------------- */
+  'leave-save': {
+    view: 'employees',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const out = p.out || {};
+      const emp = (S.data.employees || []).find(e => e.id === Number(out.employee_id));
+      need(emp, 'employee not found');
+      need(['annual', 'sick', 'unpaid'].includes(out.type), 'unknown leave type');
+      need(/^\d{4}-\d{2}-\d{2}$/.test(out.from_date || '') && /^\d{4}-\d{2}-\d{2}$/.test(out.to_date || ''), 'dates required');
+      need(out.from_date <= out.to_date, 'from date must not be after to date');
+      const days = Math.round((new Date(out.to_date) - new Date(out.from_date)) / 86400000) + 1;
+      if (p.id || out.id) {
+        const lr = (S.data.leave_requests || []).find(x => x.id === Number(p.id || out.id));
+        need(lr, 'leave request not found');
+        need(lr.status === 'submitted', 'only a pending request can be edited');
+        need(user.role === 'admin' || lr.requested_by === user.username, 'only the requester can edit it');
+        Object.assign(lr, {
+          employee_id: emp.id, type: out.type, from_date: out.from_date, to_date: out.to_date,
+          days, reason: String(out.reason || ''),
+        });
+        S.save();
+        return { leave: lr };
+      }
+      /* requester identity comes from the session, never the payload */
+      const row = S.add('leave_requests', {
+        employee_id: emp.id, type: out.type, from_date: out.from_date, to_date: out.to_date,
+        days, reason: String(out.reason || ''), status: 'submitted',
+        requested_by: user.username, decided_by: null, decided_at: null, decision_note: '',
+        created_at: new Date().toISOString(),
+      });
+      S.save();
+      return { leave: row };
+    },
+  },
+  'leave-decide': {
+    view: 'employees',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const lr = (S.data.leave_requests || []).find(x => x.id === Number(p.id));
+      need(lr, 'leave request not found');
+      need(lr.status === 'submitted', 'request is not awaiting a decision');
+      need(['approved', 'rejected'].includes(p.decision), 'unknown decision');
+      /* separation of duties, mirroring expenses: an employee cannot decide
+         their own request; the admin (owner) can */
+      need(user.role === 'admin' || lr.requested_by !== user.username, 'you cannot decide your own leave request');
+      need(p.decision !== 'rejected' || String(p.note || '').trim(), 'rejection needs a reason');
+      lr.status = p.decision;
+      lr.decided_by = user.username;
+      lr.decided_at = new Date().toISOString();
+      lr.decision_note = String(p.note || '');
+      S.save();
+      return { leave: lr };
+    },
+  },
+  'leave-delete': {
+    view: 'employees',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const lr = (S.data.leave_requests || []).find(x => x.id === Number(p.id));
+      need(lr, 'leave request not found');
+      need(lr.status === 'submitted', 'a decided request is part of the record and stays');
+      need(user.role === 'admin' || lr.requested_by === user.username, 'only the requester can delete it');
+      S.data.leave_requests = S.data.leave_requests.filter(x => x.id !== lr.id);
+      S.save();
+      return { deleted: lr.id };
+    },
+  },
+  'attendance-save': {
+    view: 'employees',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const out = p.out || {};
+      const emp = (S.data.employees || []).find(e => e.id === Number(out.employee_id));
+      need(emp, 'employee not found');
+      need(/^\d{4}-\d{2}-\d{2}$/.test(out.date || ''), 'date required');
+      const HHMM = v => /^([01]?\d|2[0-3]):[0-5]\d$/.test(v || '');
+      need(!out.check_in || HHMM(out.check_in), 'check-in must be HH:MM');
+      need(!out.check_out || HHMM(out.check_out), 'check-out must be HH:MM');
+      /* hours are computed server-side; a client-sent hours field is ignored */
+      let hours = 0;
+      if (HHMM(out.check_in) && HHMM(out.check_out)) {
+        const [h1, m1] = out.check_in.split(':').map(Number);
+        const [h2, m2] = out.check_out.split(':').map(Number);
+        hours = Math.max(0, Math.round(((h2 * 60 + m2) - (h1 * 60 + m1)) / 6) / 10);
+      }
+      /* one record per employee per day: saving again corrects it */
+      const existing = (S.data.attendance || []).find(a => a.employee_id === emp.id && a.date === out.date);
+      if (existing) {
+        need(user.role === 'admin' || existing.recorded_by === user.username, 'only the recorder or admin can correct it');
+        Object.assign(existing, { check_in: out.check_in || '', check_out: out.check_out || '', hours, note: String(out.note || '') });
+        S.save();
+        return { entry: existing };
+      }
+      const row = S.add('attendance', {
+        employee_id: emp.id, date: out.date, check_in: out.check_in || '', check_out: out.check_out || '',
+        hours, note: String(out.note || ''), recorded_by: user.username,
+      });
+      S.save();
+      return { entry: row };
+    },
+  },
+  'attendance-delete': {
+    view: 'employees',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const a = (S.data.attendance || []).find(x => x.id === Number(p.id));
+      need(a, 'attendance record not found');
+      need(user.role === 'admin' || a.recorded_by === user.username, 'only the recorder or admin can delete it');
+      S.data.attendance = S.data.attendance.filter(x => x.id !== a.id);
+      S.save();
+      return { deleted: a.id };
     },
   },
 };

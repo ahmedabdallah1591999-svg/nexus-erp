@@ -33,6 +33,7 @@ function emptyData() {
   return {
     meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1, orderSeq: 1, returnSeq: 1, ticketSeq: 1 },
     companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [], projects: [], timesheets: [], tickets: [], ticket_replies: [],
+    leave_requests: [], attendance: [],
     products: [], suppliers: [], invoices: [], purchases: [], sales_orders: [], returns: [], recurring: [],
     ledger: [], expenses: [], employees: [], notes: [], messages: [],
     accounts: [], journal: [], payments: [], warehouses: [], stock_moves: [],

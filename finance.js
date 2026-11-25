@@ -280,10 +280,12 @@ function renderEmployees() {
     <div class="table-wrap"><table class="data">
       <thead><tr><th>${t('Employee')}</th><th>${t('Department')}</th><th>${t('Contact')}</th><th>${t('Salary')}</th><th>${t('Hired')}</th><th>${t('Status')}</th><th></th></tr></thead>
       <tbody>${body || `<tr><td colspan="7" class="empty-state">${t('No employees yet.')}</td></tr>`}</tbody>
-    </table></div>`;
+    </table></div>
+    <div id="hrSections"></div>`;
 
   $('#addEmployee').onclick = () => editEmployee(null);
   $('#payrollBtn').onclick = runPayroll;
+  if (typeof renderHrSections === 'function') renderHrSections();
   $('#view-employees').querySelector('tbody').addEventListener('click', e => {
     const btn = e.target.closest('button[data-act]');
     if (!btn) return;
