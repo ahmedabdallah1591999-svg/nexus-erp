@@ -1314,7 +1314,54 @@ const OPS = {
         amount: ctx.invoiceTotal(inv), method, date: today, memo: `POS ${inv.number}`,
       }), 'payment could not be recorded');
       if (shift) inv.pos_shift_id = shift.id;
-      if (shift) shift.sales_total = Math.round((ctx.num(shift.sales_total) + ctx.invoiceTotal(inv)) * 100) / 100;
+      inv.pos_method = method;
+      if (shift) {
+        shift.sales_total = Math.round((ctx.num(shift.sales_total) + ctx.invoiceTotal(inv)) * 100) / 100;
+        shift['sales_' + method] = Math.round((ctx.num(shift['sales_' + method]) + ctx.invoiceTotal(inv)) * 100) / 100;
+      }
+      S.save();
+      return { invoice: inv };
+    },
+  },
+  'pos-refund': {
+    view: 'pos',
+    run(ctx, p, user) {
+      /* full refund of a till sale: restock, reverse revenue and COGS, pay
+         the money back out of the till. One time, whole invoice. */
+      const S = ctx.store;
+      const inv = (S.data.invoices || []).find(i => i.id === Number(p.id));
+      need(inv, 'invoice not found');
+      need(inv.pos_ref, 'not a POS sale');
+      need(inv.status === 'paid', 'only a paid POS sale can be refunded');
+      const method = ['cash', 'bank', 'transfer'].includes(p.method) ? p.method : (inv.pos_method || 'cash');
+      const today = ctx.todayStr();
+      const total = ctx.invoiceTotal(inv);
+      let cogs = 0;
+      for (const it of (inv.items || [])) {
+        const prod = S.data.products.find(x => x.id === Number(it.product_id));
+        if (!prod) continue;
+        cogs += ctx.num(prod.cost) * ctx.num(it.qty);
+        ctx.adjustStock(prod.id, it.warehouse_id || prod.warehouse_id || null, ctx.num(it.qty), `POS refund ${inv.number}`);
+      }
+      cogs = Math.round(cogs * 100) / 100;
+      const lines = [
+        { account_id: ctx.accountByCode('4000').id, debit: total },
+        { account_id: ctx.accountByCode('1000').id, credit: total },
+      ];
+      if (cogs > 0) {
+        lines.push({ account_id: ctx.accountByCode('1200').id, debit: cogs });
+        lines.push({ account_id: ctx.accountByCode('5000').id, credit: cogs });
+      }
+      ctx.postJournal({ date: today, memo: `POS refund - ${inv.number}`, ref_type: 'pos-refund', ref_id: inv.id, lines });
+      S.add('payments', {
+        date: today, direction: 'out', contact_id: inv.contact_id || null, supplier_id: null,
+        amount: total, method, ref_type: 'invoice', ref_id: inv.id, memo: `POS refund ${inv.number}`, journal_id: null,
+      });
+      inv.status = 'refunded';
+      if (inv.pos_shift_id) {
+        const sh = (S.data.pos_shifts || []).find(x => x.id === inv.pos_shift_id);
+        if (sh) sh['refund_' + method] = Math.round((ctx.num(sh['refund_' + method]) + total) * 100) / 100;
+      }
       S.save();
       return { invoice: inv };
     },
@@ -1328,7 +1375,9 @@ const OPS = {
       const row = S.add('pos_shifts', {
         cashier: user.username, status: 'open', opened_at: new Date().toISOString(),
         opening_float: Math.round(ctx.num(p.opening_float) * 100) / 100,
-        sales_total: 0, closed_at: null, counted_cash: null, variance: null,
+        sales_total: 0, sales_cash: 0, sales_bank: 0, sales_transfer: 0,
+        refund_cash: 0, refund_bank: 0, refund_transfer: 0,
+        closed_at: null, counted_cash: null, variance: null,
       });
       S.save();
       return { shift: row };
@@ -1346,10 +1395,14 @@ const OPS = {
          financial adjustment — a variance stays a review item, not a book
          entry nobody approved */
       const counted = Math.round(ctx.num(p.counted_cash) * 100) / 100;
+      /* expected CASH only: card/transfer sales never entered the till, and
+         refunds paid out in cash reduce it */
+      const expectedCash = Math.round((ctx.num(sh.opening_float) + ctx.num(sh.sales_cash) - ctx.num(sh.refund_cash)) * 100) / 100;
       sh.status = 'closed';
       sh.closed_at = new Date().toISOString();
       sh.counted_cash = counted;
-      sh.variance = Math.round((counted - (ctx.num(sh.opening_float) + ctx.num(sh.sales_total))) * 100) / 100;
+      sh.expected_cash = expectedCash;
+      sh.variance = Math.round((counted - expectedCash) * 100) / 100;
       S.save();
       return { shift: sh };
     },

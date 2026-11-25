@@ -23,10 +23,14 @@ function posOpenShift() {
   });
 }
 
+function posExpectedCash(sh) {
+  return Math.round((num(sh.opening_float) + num(sh.sales_cash) - num(sh.refund_cash)) * 100) / 100;
+}
+
 function posCloseShift(sh) {
-  const expected = Math.round((num(sh.opening_float) + num(sh.sales_total)) * 100) / 100;
+  const expected = posExpectedCash(sh);
   openModal(t('Close shift'), [
-    { key: 'counted_cash', label: `${t('Counted cash')} (${t('Expected')}: ${money(expected)})`, type: 'number', required: true, value: expected },
+    { key: 'counted_cash', label: `${t('Counted cash')} (${t('Expected cash')}: ${money(expected)})`, type: 'number', required: true, value: expected },
   ], out => {
     if (inServerMode()) { txCall('pos-shift-close', { id: sh.id, counted_cash: num(out.counted_cash) }, t('Shift closed')); return; }
     alert(t('This change needs the server.'));
@@ -97,14 +101,15 @@ function renderPos() {
     </tr>`;
   }).join('');
   const recent = (store.data.invoices || []).filter(i => i.pos_ref).sort((a, b) => b.id - a.id).slice(0, 10).map(i => `
-    <tr><td>${esc(i.number)}</td><td>${esc(i.issue_date || '')}</td><td>${money(invoiceTotal(i))}</td><td><span class="badge won">${t(i.status)}</span></td></tr>`).join('');
+    <tr><td>${esc(i.number)}</td><td>${money(invoiceTotal(i))}</td><td><span class="badge ${i.status === 'refunded' ? 'lost' : 'won'}">${t(i.status)}</span>${i.status === 'paid' ? ` <button class="icon-btn" data-refund="${i.id}" title="${t('Refund')}">↩</button>` : ''}</td></tr>`).join('');
 
   $('#view-pos').innerHTML = `
     <div class="view-head">
       <div><h2>${t('Point of sale')}</h2><div class="sub">${t('Tap products, charge once — invoice, payment, stock and books post together.')}</div></div>
       <div class="head-actions">
         ${shift
-          ? `<span class="badge won">${t('Open shift')} · ${t('Expected')}: ${money(Math.round((num(shift.opening_float) + num(shift.sales_total)) * 100) / 100)}</span>
+          ? `<span class="badge won">${t('Open shift')} · ${t('Expected cash')}: ${money(posExpectedCash(shift))}</span>
+             <span class="cell-sub">${t('cash')}: ${money(num(shift.sales_cash))} · ${t('bank')}: ${money(num(shift.sales_bank))} · ${t('transfer')}: ${money(num(shift.sales_transfer))} · ${t('Refunds')}: ${money(num(shift.refund_cash) + num(shift.refund_bank) + num(shift.refund_transfer))}</span>
              <button class="secondary-btn" id="posClose">${t('Close shift')}</button>`
           : `<button class="secondary-btn" id="posOpen">${t('Open shift')}</button>`}
       </div>
@@ -121,8 +126,8 @@ function renderPos() {
         </div>
         <h3>${t('Recent till sales')}</h3>
         <div class="table-wrap"><table class="data">
-          <thead><tr><th>${t('Invoice')}</th><th>${t('Date')}</th><th>${t('Total')}</th><th>${t('Status')}</th></tr></thead>
-          <tbody>${recent || `<tr><td colspan="4" class="empty-state">${t('No sales yet.')}</td></tr>`}</tbody>
+          <thead><tr><th>${t('Invoice')}</th><th>${t('Total')}</th><th>${t('Status')}</th></tr></thead>
+          <tbody>${recent || `<tr><td colspan="3" class="empty-state">${t('No sales yet.')}</td></tr>`}</tbody>
         </table></div>
       </div>
     </div>`;
@@ -134,6 +139,13 @@ function renderPos() {
     if (tile) return posAdd(Number(tile.dataset.pos));
     const bump = e.target.closest('button[data-bump]');
     if (bump) { const [pid, d] = bump.dataset.bump.split('|'); return posBump(Number(pid), Number(d)); }
+    const rf = e.target.closest('button[data-refund]');
+    if (rf) {
+      const inv = (store.data.invoices || []).find(i => i.id === Number(rf.dataset.refund));
+      if (inv && window.confirm(`${t('Refund')} ${esc(inv.number)} — ${money(invoiceTotal(inv))}?`)) {
+        txCall('pos-refund', { id: inv.id }, t('Refund posted'));
+      }
+    }
   };
   const openBtn = $('#posOpen'); if (openBtn) openBtn.onclick = posOpenShift;
   const closeBtn = $('#posClose'); if (closeBtn) closeBtn.onclick = () => posCloseShift(shift);

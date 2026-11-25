@@ -338,7 +338,7 @@ table.data tbody tr:hover { background: #f8f9ff; }
 .reply-box textarea { font: inherit; padding: 8px; border: 1px solid var(--line, #d7dce3); border-radius: 8px; }
 
 /* point of sale */
-.pos-layout { display: grid; grid-template-columns: 1fr 380px; gap: 14px; align-items: start; }
+.pos-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 340px); gap: 14px; align-items: start; }
 .pos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
 .pos-tile { display: flex; flex-direction: column; gap: 4px; padding: 12px; border-radius: 10px; border: 1px solid #dfe5f0; background: #ffffff; color: #1a2233; cursor: pointer; text-align: start; box-shadow: 0 1px 2px rgba(15,23,42,.06); }
 .pos-tile:disabled { opacity: .4; cursor: not-allowed; }
@@ -346,3 +346,7 @@ table.data tbody tr:hover { background: #f8f9ff; }
 .pos-side { display: flex; flex-direction: column; gap: 10px; }
 .pos-total { display: flex; justify-content: space-between; align-items: center; padding: 10px 4px; }
 @media (max-width: 900px) { .pos-layout { grid-template-columns: 1fr; } }
+
+.pos-side .table-wrap { overflow-x: auto; }
+.pos-side table.data { width: 100%; table-layout: fixed; }
+.pos-side table.data td, .pos-side table.data th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
