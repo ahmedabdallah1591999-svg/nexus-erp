@@ -220,6 +220,12 @@ function renderPayments() {
   const ar = arAging(), ap = apAging();
   const arTotal = ar.reduce((s, r) => s + r.total, 0);
   const apTotal = ap.reduce((s, r) => s + r.total, 0);
+  /* credits are shown separately and never netted into AR / AP (a debit balance with a supplier is an asset;
+     a customer credit is a liability) */
+  const openCr = coll => (store.data[coll] || []).filter(c => c.status === 'open' && num(c.remaining) > 0.005);
+  const scOpen = openCr('supplier_credits'), ccOpen = openCr('customer_credits');
+  const scTotal = scOpen.reduce((s, c) => s + num(c.remaining), 0), ccTotal = ccOpen.reduce((s, c) => s + num(c.remaining), 0);
+  const creditNote = (rows, nameFn, titleKey) => rows.length ? `<div class="cell-sub" style="margin-top:8px">${t(titleKey)}: ${rows.map(c => `${esc(nameFn(c) || '—')} ${money(c.remaining)} (${esc(c.number)})`).join(' · ')}</div>` : '';
   const body = rows.map(p => {
     const party = p.direction === 'in'
       ? contactName(store.contact(p.contact_id)) || '—'
@@ -246,10 +252,11 @@ function renderPayments() {
     <div class="cards">
       <div class="stat-card"><div class="label">${t('Receivable (AR)')}</div><div class="value">${money(arTotal)}</div></div>
       <div class="stat-card"><div class="label">${t('Payable (AP)')}</div><div class="value">${money(apTotal)}</div></div>
+      ${scOpen.length || ccOpen.length ? `<div class="stat-card"><div class="label">${t('Supplier credits (asset, not netted)')}</div><div class="value">${money(scTotal)}</div></div><div class="stat-card"><div class="label">${t('Customer credits (liability, not netted)')}</div><div class="value">${money(ccTotal)}</div></div>` : ''}
       <div class="stat-card"><div class="label">${t('Net position')}</div><div class="value" style="color:${arTotal - apTotal >= 0 ? 'var(--green)' : 'var(--red)'}">${money(arTotal - apTotal)}</div></div>
     </div>
-    <div class="card"><h3>${t('AR aging')} (${t('by customer')})</h3>${agingTable(ar, r => contactName(store.contact(r.contact_id)))}</div>
-    <div class="card"><h3>${t('AP aging')} (${t('by supplier')})</h3>${agingTable(ap, r => (store.data.suppliers.find(s => s.id === r.supplier_id) || {}).name)}</div>
+    <div class="card"><h3>${t('AR aging')} (${t('by customer')})</h3>${agingTable(ar, r => contactName(store.contact(r.contact_id)))}${creditNote(ccOpen, c => contactName(store.contact(c.contact_id)), 'Open customer credits, not deducted above')}</div>
+    <div class="card"><h3>${t('AP aging')} (${t('by supplier')})</h3>${agingTable(ap, r => (store.data.suppliers.find(s => s.id === r.supplier_id) || {}).name)}${creditNote(scOpen, c => (store.data.suppliers.find(s => s.id === c.supplier_id) || {}).name, 'Open supplier credits, not deducted above')}</div>
     <div class="card"><h3>${t('Recent payments')}</h3>
       <div class="table-wrap"><table class="data">
         <thead><tr><th>${t('Date')}</th><th>${t('Direction')}</th><th>${t('Party')}</th><th>${t('Reference')}</th><th>${t('Amount')}</th><th>${t('Method')}</th><th>${t('Memo')}</th></tr></thead>

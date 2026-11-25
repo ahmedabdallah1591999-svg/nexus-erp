@@ -174,6 +174,20 @@ function accountingInvariants() {
   /* the Inventory account must reconcile with the stock ledger at cost —
      a balanced journal alone does not prove correct financial semantics */
   if (typeof inventoryValuationViolations === 'function') bad.push(...inventoryValuationViolations());
+  /* credit balances must reconcile to their GL accounts and to their own usage history:
+     customer credits (liability 2150, credit balance) and supplier credits (asset 1150, debit balance) */
+  const credBal = (code, sign) => { const a = store.data.accounts.find(x => x.code === code); if (!a) return 0; return Math.round(sign * store.data.journal.reduce((s, j) => s + j.lines.filter(l => l.account_id === a.id).reduce((q, l) => q + num(l.debit) - num(l.credit), 0), 0) * 100) / 100; };
+  for (const [coll, code, sign, label] of [['customer_credits', '2150', -1, 'customer credits'], ['supplier_credits', '1150', 1, 'supplier credits']]) {
+    const rows = store.data[coll] || [];
+    let open = 0;
+    for (const c of rows) {
+      const used = Math.round((c.applications || []).reduce((s, x) => s + num(x.amount), 0) * 100) / 100;
+      if (c.status === 'void') { if (num(c.remaining) !== 0) bad.push(`${label} ${c.number}: void credit still has a balance`); continue; }
+      if (Math.abs(num(c.amount) - used - num(c.remaining)) > 0.005 || num(c.remaining) < -0.005) bad.push(`${label} ${c.number}: balance does not match its amount and usage history`);
+      open += num(c.remaining);
+    }
+    if (rows.length && Math.abs(Math.round(open * 100) / 100 - credBal(code, sign)) > 0.005) bad.push(`${label} total ${open.toFixed(2)} does not match account ${code} (${credBal(code, sign).toFixed(2)})`);
+  }
   return bad;
 }
 
