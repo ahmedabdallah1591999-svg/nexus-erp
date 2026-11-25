@@ -24,16 +24,16 @@ const VIEW_LABELS = {
   quotes: 'Quotes', orders: 'Sales orders', accounting: 'Accounting', payments: 'Payments', stock: 'Stock ledger',
   tasks: 'Tasks', notes: 'Notes', invoices: 'Invoices', products: 'Inventory', projects: 'Projects',
   purchases: 'Purchases', suppliers: 'Suppliers', finance: 'Finance', expenses: 'Expense requests', employees: 'Employees',
-  reports: 'Reports', contact: 'Contact us', helpdesk: 'Helpdesk', 'hr-self': 'My HR', assets: 'Assets', pos: 'Point of sale',
+  reports: 'Reports', contact: 'Contact us', helpdesk: 'Helpdesk', 'hr-self': 'My HR', assets: 'Assets', pos: 'Point of sale', quality: 'Quality & documents',
 };
 
 /* ---------------- Data layer ---------------- */
 
 function emptyData() {
   return {
-    meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1, orderSeq: 1, returnSeq: 1, ticketSeq: 1 },
+    meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1, orderSeq: 1, returnSeq: 1, ticketSeq: 1, qcSeq: 1, docSeq: 1 },
     companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [], projects: [], timesheets: [], tickets: [], ticket_replies: [],
-    leave_requests: [], attendance: [], assets: [], pos_shifts: [],
+    leave_requests: [], attendance: [], assets: [], quality_checks: [], documents: [], pos_shifts: [],
     products: [], suppliers: [], invoices: [], purchases: [], sales_orders: [], returns: [], recurring: [],
     ledger: [], expenses: [], employees: [], notes: [], messages: [],
     accounts: [], journal: [], payments: [], warehouses: [], stock_moves: [],

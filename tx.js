@@ -29,7 +29,7 @@ const MODULE_FILES = ['i18n.js', 'i18n-extra.js', 'core.js', 'seed.js', 'crm.js'
 /* Collections only the server may write (never accepted from a client PUT). */
 const SERVER_OWNED = new Set(['accounts', 'journal', 'payments', 'warehouses', 'stock_moves',
   'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring', 'expenses', 'projects', 'timesheets',
-  'tickets', 'ticket_replies', 'leave_requests', 'attendance', 'assets', 'pos_shifts', 'production']);
+  'tickets', 'ticket_replies', 'leave_requests', 'attendance', 'assets', 'pos_shifts', 'production', 'quality_checks', 'documents']);
 
 /* ---------------- browser sandbox ---------------- */
 
@@ -1094,6 +1094,168 @@ const OPS = {
     },
   },
 
+  /* ---------------- quality + document control ---------------- */
+  'qc-save': {
+    view: 'quality', nonFinancial: true,
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const out = p.out || {};
+      const now = new Date().toISOString();
+      const TYPES = ['incoming', 'in-process', 'final'];
+      need(String(out.title || '').trim(), 'title required');
+      need(!out.product_id || S.data.products.some(x => x.id === Number(out.product_id)), 'product not found');
+      const inspected = Number(out.qty_inspected);
+      need(Number.isFinite(inspected) && inspected > 0, 'inspected quantity must be positive');
+      if (p.id) {
+        const q = (S.data.quality_checks || []).find(x => x.id === Number(p.id));
+        need(q, 'inspection not found');
+        need(q.status === 'open', 'a closed inspection cannot be edited');
+        Object.assign(q, {
+          title: String(out.title).trim(), type: TYPES.includes(out.type) ? out.type : q.type,
+          product_id: out.product_id ? Number(out.product_id) : null,
+          reference: String(out.reference || ''), qty_inspected: inspected,
+          notes: String(out.notes || ''), updated_at: now,
+        });
+        S.save();
+        return { check: q };
+      }
+      /* number, inspector, result and status are server-set: the client
+         cannot pre-fill a "pass" or another person's name */
+      const row = S.add('quality_checks', {
+        number: `QC-${String(S.data.meta.qcSeq++).padStart(4, '0')}`,
+        title: String(out.title).trim(), type: TYPES.includes(out.type) ? out.type : 'incoming',
+        product_id: out.product_id ? Number(out.product_id) : null,
+        reference: String(out.reference || ''), qty_inspected: inspected, qty_failed: 0,
+        notes: String(out.notes || ''), result: 'pending', status: 'open', corrective_action: '',
+        created_by: user.username, created_at: now, updated_at: now,
+      });
+      S.save();
+      return { check: row };
+    },
+  },
+  'qc-result': {
+    view: 'quality', nonFinancial: true,
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const q = (S.data.quality_checks || []).find(x => x.id === Number(p.id));
+      need(q, 'inspection not found');
+      need(q.status === 'open', 'a closed inspection cannot be changed');
+      need(['pass', 'fail'].includes(p.result), 'result must be pass or fail');
+      const failed = p.result === 'fail' ? Number(p.qty_failed) : 0;
+      if (p.result === 'fail') need(Number.isFinite(failed) && failed > 0 && failed <= q.qty_inspected, 'failed quantity must be between 1 and the inspected quantity');
+      q.result = p.result; q.qty_failed = failed;
+      q.inspected_by = user.username; q.inspected_at = new Date().toISOString(); q.updated_at = q.inspected_at;
+      if (p.result === 'pass') { q.status = 'closed'; q.closed_at = q.inspected_at; }
+      S.save();
+      return { check: q };
+    },
+  },
+  'qc-close': {
+    view: 'quality', nonFinancial: true,
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const q = (S.data.quality_checks || []).find(x => x.id === Number(p.id));
+      need(q, 'inspection not found');
+      need(q.status === 'open', 'already closed');
+      need(q.result === 'fail', 'only a failed inspection needs a corrective action to close');
+      need(String(p.corrective_action || '').trim().length >= 5, 'corrective action required to close a nonconformance');
+      q.corrective_action = String(p.corrective_action).trim();
+      q.status = 'closed'; q.closed_by = user.username; q.closed_at = new Date().toISOString(); q.updated_at = q.closed_at;
+      S.save();
+      return { check: q };
+    },
+  },
+  'qc-delete': {
+    view: 'quality', nonFinancial: true,
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const q = (S.data.quality_checks || []).find(x => x.id === Number(p.id));
+      need(q, 'inspection not found');
+      need(user.role === 'admin' || (q.created_by === user.username && q.result === 'pending'), 'only admin can delete an inspected record');
+      S.data.quality_checks = S.data.quality_checks.filter(x => x.id !== q.id);
+      S.save();
+      return { deleted: q.id };
+    },
+  },
+  'doc-save': {
+    view: 'quality', nonFinancial: true,
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const out = p.out || {};
+      const now = new Date().toISOString();
+      need(String(out.title || '').trim(), 'title required');
+      const DT = ['policy', 'procedure', 'work-instruction', 'contract', 'form', 'other'];
+      if (p.id) {
+        const d = (S.data.documents || []).find(x => x.id === Number(p.id));
+        need(d, 'document not found');
+        need(d.status !== 'approved', 'an approved document is locked: revise it to change it');
+        Object.assign(d, { title: String(out.title).trim(), doc_type: DT.includes(out.doc_type) ? out.doc_type : d.doc_type,
+          location: String(out.location || ''), summary: String(out.summary || ''), updated_at: now });
+        S.save();
+        return { document: d };
+      }
+      const row = S.add('documents', {
+        number: `DOC-${String(S.data.meta.docSeq++).padStart(4, '0')}`,
+        title: String(out.title).trim(), doc_type: DT.includes(out.doc_type) ? out.doc_type : 'other',
+        location: String(out.location || ''), summary: String(out.summary || ''),
+        version: 1, status: 'draft', owner: user.username,
+        history: [{ version: 1, by: user.username, at: now, note: 'created' }],
+        created_at: now, updated_at: now,
+      });
+      S.save();
+      return { document: row };
+    },
+  },
+  'doc-status': {
+    view: 'quality', nonFinancial: true,
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const d = (S.data.documents || []).find(x => x.id === Number(p.id));
+      need(d, 'document not found');
+      const now = new Date().toISOString();
+      const to = p.status;
+      const allowed = { draft: ['review'], review: ['approved', 'draft'], approved: ['obsolete'], obsolete: [] };
+      need((allowed[d.status] || []).includes(to), `cannot move from ${d.status} to ${to}`);
+      if (to === 'approved') {
+        /* separation of duties: the owner cannot approve their own document */
+        need(d.owner !== user.username, 'a document cannot be approved by its owner');
+        d.approved_by = user.username; d.approved_at = now;
+      }
+      d.status = to; d.updated_at = now;
+      d.history.push({ version: d.version, by: user.username, at: now, note: `status: ${to}` });
+      S.save();
+      return { document: d };
+    },
+  },
+  'doc-revise': {
+    view: 'quality', nonFinancial: true,
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const d = (S.data.documents || []).find(x => x.id === Number(p.id));
+      need(d, 'document not found');
+      need(d.status === 'approved', 'only an approved document is revised');
+      need(String(p.note || '').trim(), 'revision note required');
+      const now = new Date().toISOString();
+      d.version += 1; d.status = 'draft'; d.owner = user.username;
+      delete d.approved_by; delete d.approved_at; d.updated_at = now;
+      d.history.push({ version: d.version, by: user.username, at: now, note: String(p.note).trim() });
+      S.save();
+      return { document: d };
+    },
+  },
+  'doc-delete': {
+    view: 'quality', nonFinancial: true,
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const d = (S.data.documents || []).find(x => x.id === Number(p.id));
+      need(d, 'document not found');
+      need(user.role === 'admin' || (d.owner === user.username && d.status === 'draft'), 'only admin can delete a document beyond draft');
+      S.data.documents = S.data.documents.filter(x => x.id !== d.id);
+      S.save();
+      return { deleted: d.id };
+    },
+  },
+
   /* ---------------- HR: time off + attendance ---------------- */
   'leave-save': {
     view: ['employees', 'hr-self'],
@@ -1587,10 +1749,18 @@ function runTx(db, user, op, payload, canView) {
     ctx.dbUsers = db.users || [];
     ctx.ensureCOA();
     ctx.ensureStockBaseline();
+    const BOOK_KEYS = ['journal', 'ledger', 'stock_moves', 'products', 'accounts', 'invoices', 'purchases', 'payments', 'warehouses', 'expenses', 'assets', 'recurring', 'sales_orders', 'returns', 'production', 'pos_shifts'];
+    const snap = () => JSON.stringify(BOOK_KEYS.map(k => ctx.store.data[k]));
+    const before = spec.nonFinancial ? snap() : null;
     const result = spec.run(ctx, payload || {}, user);
-    /* independent integrity gate on the resulting books */
-    const acc = ctx.accountingInvariants();
-    const stk = ctx.stockInvariants();
+    /* independent integrity gate on the resulting books. A nonFinancial op
+       (quality, document register) is exempt ONLY when it left every
+       books/stock collection byte-identical, so a pre-existing
+       reconciliation issue does not freeze unrelated work, and such an op
+       can never be used to slip a posting past the gate. */
+    const untouched = before !== null && snap() === before;
+    const acc = untouched ? [] : ctx.accountingInvariants();
+    const stk = untouched ? [] : ctx.stockInvariants();
     if (acc.length || stk.length) {
       /* name the unresolved reconciliation clearly — dependent financial
          postings stay blocked until an admin resolves it */
