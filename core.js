@@ -106,7 +106,7 @@ const $ = sel => document.querySelector(sel);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = v => new Intl.NumberFormat(localeTag(), { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(Number(v) || 0);
 const money0 = v => new Intl.NumberFormat(localeTag(), { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(v) || 0);
-const contactName = c => c ? `${c.first_name} ${c.last_name}`.trim() : '';
+const contactName = c => c ? (`${c.first_name || ''} ${c.last_name || ''}`.trim() || c.name || '') : '';
 const companyOf = row => row && row.company_id ? store.company(row.company_id) : null;
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const monthStr = () => todayStr().slice(0, 7);
