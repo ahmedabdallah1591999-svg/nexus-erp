@@ -101,6 +101,10 @@ class TxError extends Error {
 
 function need(cond, msg) { if (!cond) throw new TxError(msg); }
 
+/* remove fields a client may never set on a record (identity, numbering,
+   links and flags that only other transactions write) */
+function stripServerFields(out, keys) { for (const k of keys) delete out[k]; return out; }
+
 function validItems(items, S) {
   need(Array.isArray(items) && items.length > 0, 'items required');
   for (const it of items) {
@@ -170,7 +174,7 @@ const OPS = {
   'quote-save': {
     view: 'quotes',
     run(ctx, p) {
-      const out = p.out || {};
+      const out = stripServerFields(p.out || {}, ['id', 'number', 'invoiced_invoice_id', 'order_id', 'created_at']);
       need(['draft', 'sent', 'accepted', 'rejected'].includes(out.status), 'bad status');
       const S = ctx.store;
       validItems(out.items, S);
@@ -589,7 +593,8 @@ const OPS = {
   'product-save': {
     view: 'products',
     run(ctx, p) {
-      const out = p.out || {};
+      /* bom is written only by bom-save (validated, single-level) */
+      const out = stripServerFields(p.out || {}, ['id', 'bom', 'created_at']);
       need(String(out.name || '').trim(), 'name required');
       need(ctx.num(out.price) >= 0 && ctx.num(out.cost) >= 0, 'prices must not be negative');
       const S = ctx.store;
@@ -631,7 +636,7 @@ const OPS = {
   'order-save': {
     view: 'orders',
     run(ctx, p) {
-      const out = p.out || {};
+      const out = stripServerFields(p.out || {}, ['id', 'number', 'invoice_id', 'quote_id', 'fulfilled_date', 'created_at']);
       need(['draft', 'confirmed'].includes(out.status), 'bad status');
       const S = ctx.store;
       validItems(out.items, S);
@@ -915,7 +920,7 @@ const OPS = {
   'recurring-save': {
     view: 'invoices',
     run(ctx, p) {
-      const out = p.out || {};
+      const out = stripServerFields(p.out || {}, ['id', 'last_invoice_id', 'created_at']);
       const S = ctx.store;
       need(['weekly', 'monthly', 'quarterly', 'yearly'].includes(out.interval), 'bad interval');
       need(out.contact_id && S.data.contacts.some(c => c.id === Number(out.contact_id)), 'customer required');
