@@ -752,6 +752,42 @@ const OPS = {
     },
   },
 
+  'reclass-settlement': {
+    view: 'accounting',
+    run(ctx, p, user) {
+      /* legacy settlement misclassification is an accounting decision: a
+         dated reclass posts only on explicit admin approval, one entry per
+         payment, original entries untouched. Payments already refunded out
+         of the cash account are excluded — their money is already gone. */
+      need(user && user.role === 'admin', 'only an admin can approve a settlement reclass');
+      ctx.ensureCOA();
+      const cash = ctx.accountByCode('1000'), bank = ctx.accountByCode('1010');
+      const S = ctx.store;
+      const refunded = new Set((S.data.payments || []).filter(o => o.direction === 'out').map(o => o.ref_type + ':' + o.ref_id));
+      const rows = (S.data.payments || []).filter(pay =>
+        pay.direction === 'in' && !pay.reclassed && !refunded.has(pay.ref_type + ':' + pay.ref_id) &&
+        ['bank', 'transfer', 'card'].includes(pay.method) && pay.journal_id &&
+        (((S.data.journal || []).find(j => j.id === pay.journal_id) || {}).lines || [])
+          .some(l => ctx.num(l.debit) > 0 && l.account_id === cash.id));
+      const targets = p.all ? rows : rows.filter(pay => pay.id === Number(p.id));
+      need(targets.length, 'no matching legacy settlement to reclass');
+      let posted = 0, total = 0;
+      for (const pay of targets) {
+        const amt = Math.round(ctx.num(pay.amount) * 100) / 100;
+        const e = ctx.postJournal({
+          date: ctx.todayStr(),
+          memo: `${ctx.t('Reclass: legacy settlement posted to cash, actual method')} ${ctx.t(pay.method)} (${pay.memo || '#' + pay.id})`,
+          ref_type: 'reclass', ref_id: pay.id,
+          lines: [{ account_id: bank.id, debit: amt }, { account_id: cash.id, credit: amt }],
+        });
+        need(e, 'reclass journal failed');
+        pay.reclassed = true;
+        posted++; total += amt;
+      }
+      return { posted, total: Math.round(total * 100) / 100 };
+    },
+  },
+
   /* Return: validates quantities against what was sold minus what was
      already returned, then posts stock-in, revenue+VAT reversal, COGS
      reversal and the money side — atomically. */
@@ -1355,7 +1391,25 @@ const OPS = {
         { account_id: ctx.accountByCode('4000').id, debit: sub },
       ];
       if (tax > 0) lines.push({ account_id: ctx.accountByCode('2100').id, debit: tax });
-      lines.push({ account_id: ctx.accountByCode(['bank', 'transfer', 'card'].includes(method) ? '1010' : '1000').id, credit: total });
+      /* The reversal credits the account the ORIGINAL payment journal
+         actually debited — a pre-fix bank/transfer sale booked into 1000
+         must come back out of 1000, or the books keep a phantom balance.
+         The actual payout method is recorded on the refund payment row for
+         the audit trail; aligning old misclassified postings to the bank
+         account is a separate, reviewed reclass decision. */
+      let settleCode = ['bank', 'transfer', 'card'].includes(method) ? '1010' : '1000';
+      const origPay = (S.data.payments || []).find(pay => pay.ref_type === 'invoice' && Number(pay.ref_id) === inv.id && pay.direction === 'in' && pay.journal_id);
+      if (origPay) {
+        const oj = (S.data.journal || []).find(j => j.id === origPay.journal_id);
+        const arId = ctx.accountByCode('1100').id;
+        const debitLine = oj && (oj.lines || []).find(l => ctx.num(l.debit) > 0 && l.account_id !== arId);
+        const origAcc = debitLine && (S.data.accounts || []).find(a => a.id === debitLine.account_id);
+        if (origAcc) settleCode = origAcc.code;
+        /* an approved reclass moved the money to the bank account after the
+           fact — then the refund leaves from there */
+        if (origPay.reclassed) settleCode = '1010';
+      }
+      lines.push({ account_id: ctx.accountByCode(settleCode).id, credit: total });
       if (cogs > 0) {
         lines.push({ account_id: ctx.accountByCode('1200').id, debit: cogs });
         lines.push({ account_id: ctx.accountByCode('5000').id, credit: cogs });

@@ -32,6 +32,9 @@ body {
   line-height: 1.45;
 }
 button { font: inherit; cursor: pointer; }
+/* RTL layouts overflow leftward; without containment a too-wide inner table
+   expands the whole page's scrollable area instead of scrolling its own box */
+html, body { overflow-x: clip; }
 input, select, textarea { font: inherit; }
 h1, h2, h3 { margin: 0; }
 
@@ -135,7 +138,7 @@ table.lines input, table.lines select { width: 100%; border: 1px solid var(--lin
 .icon-btn:hover { background: var(--bg); color: var(--ink); }
 
 /* ---------- Views ---------- */
-.view-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.view-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
 .view-head h2 { font-size: 20px; }
 .view-head .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .hidden { display: none !important; }
@@ -348,5 +351,5 @@ table.data tbody tr:hover { background: #f8f9ff; }
 @media (max-width: 900px) { .pos-layout { grid-template-columns: 1fr; } }
 
 .pos-side .table-wrap { overflow-x: auto; }
-.pos-side table.data { width: 100%; table-layout: fixed; }
+.pos-side table.data { width: 100%; table-layout: fixed; min-width: 0; }
 .pos-side table.data td, .pos-side table.data th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
