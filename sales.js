@@ -376,47 +376,69 @@ function saveInvoice(existing, out) {
 
 /* Generate due invoices from active templates. Idempotent: next_date
    advances one period per generated invoice, so a re-run is a no-op. */
-function runRecurringInvoices(silent) {
+function recurringDueCount(r) {
+  if (r.status !== 'active' || !r.next_date) return 0;
+  const today = todayStr();
+  let n = 0, d = r.next_date;
+  while (d <= today && n < 24 && (!r.end_date || d <= r.end_date)) {
+    n++; d = advanceDate(d, r.interval, r.anchor_day);
+  }
+  return n;
+}
+
+/* Explicit per-template run. Nothing generates on view open: the user clicks
+   Run, sees how many periods are due and the consequence (drafts by default;
+   sent invoices only when the template opted into auto_post), then confirms. */
+async function runRecurringTemplate(id) {
+  const r = (store.data.recurring || []).find(x => x.id === id);
+  if (!r) return;
+  const n = recurringDueCount(r);
+  if (!n) { toast(t('Nothing due for this template yet.')); return; }
+  const how = r.auto_post ? t('sent invoice(s) — stock and accounting post immediately') : t('draft invoice(s) for review');
+  if (!window.confirm(`${t('Generate now?')} ${n} ${t('periods due')} → ${how}`)) return;
   if (inServerMode()) {
-    Sync.tx('recurring-run', {}).then(r => {
-      if (r.ok && r.data) {
-        const made = r.data.created || [], blocked = r.data.blocked || [];
+    try {
+      const res = await Sync.tx('recurring-run', { id });
+      if (res.ok && res.data) {
+        const made = res.data.created || [], blocked = res.data.blocked || [];
         if (made.length) { toast(`${t('Recurring invoices generated')}: ${made.join(', ')}`); render(); }
-        if (blocked.length && !silent) toast(`${t('Insufficient stock for recurring run')}: ${blocked.join(', ')}`);
-      }
-    }).catch(() => {});
+        if (blocked.length) toast(`${t('Insufficient stock for recurring run')}: ${blocked.join(', ')}`);
+        if (!made.length && !blocked.length) toast(t('Nothing due for this template yet.'));
+      } else if (!res.ok) toast(t('The server rejected the change.'));
+    } catch (e) { toast(t('Could not reach the server. Your change was not saved.')); }
     return;
   }
   const today = todayStr();
   const made = [], blocked = [];
-  for (const r of store.data.recurring) {
-    let guard = 0;
-    while (r.status === 'active' && r.next_date && r.next_date <= today && guard++ < 24) {
+  let guard = 0;
+  while (r.status === 'active' && r.next_date && r.next_date <= today && guard++ < 24) {
+    if (r.end_date && r.next_date > r.end_date) { r.status = 'completed'; break; }
+    if (r.auto_post) {
       const lacking = (r.items || []).map(it => {
         if (it.product_id == null) return null;
         const prod = store.product(it.product_id);
         return prod && num(prod.stock) < num(it.qty) ? prod : null;
       }).find(x => x);
       if (lacking) { blocked.push(`${lacking.name} (${r.next_date})`); break; }
-      const before = store.data.invoices.length;
-      saveInvoice(null, {
-        status: 'sent', contact_id: r.contact_id, deal_id: null,
-        issue_date: r.next_date, due_date: r.next_date,
-        tax_rate: r.tax_rate || 0, notes: r.notes || '',
-        items: r.items.map(it => ({ ...it })),
-        recurring_id: r.id,
-      });
-      const inv = store.data.invoices[store.data.invoices.length - 1];
-      r.last_invoice_id = inv.id;
-      made.push(inv.number);
-      r.next_date = advanceDate(r.next_date, r.interval);
-      if (r.end_date && r.next_date > r.end_date) r.status = 'completed';
-      if (store.data.invoices.length === before) break; // safety: nothing created, do not spin
     }
+    const before = store.data.invoices.length;
+    saveInvoice(null, {
+      status: r.auto_post ? 'sent' : 'draft', contact_id: r.contact_id, deal_id: null,
+      issue_date: r.next_date, due_date: r.next_date,
+      tax_rate: r.tax_rate || 0, notes: r.notes || '',
+      items: r.items.map(it => ({ ...it })),
+      recurring_id: r.id,
+    });
+    const inv = store.data.invoices[store.data.invoices.length - 1];
+    r.last_invoice_id = inv.id;
+    made.push(inv.number);
+    r.next_date = advanceDate(r.next_date, r.interval, r.anchor_day);
+    if (r.end_date && r.next_date > r.end_date) r.status = 'completed';
+    if (store.data.invoices.length === before) break;
   }
-  if (made.length || blocked.length) store.save();
-  if (made.length) toast(`${t('Recurring invoices generated')}: ${made.join(', ')}`);
-  if (blocked.length && !silent) toast(`${t('Insufficient stock for recurring run')}: ${blocked.join(', ')}`);
+  if (made.length || blocked.length || r.status === 'completed') store.save();
+  if (made.length) { toast(`${t('Recurring invoices generated')}: ${made.join(', ')}`); render(); }
+  if (blocked.length) toast(`${t('Insufficient stock for recurring run')}: ${blocked.join(', ')}`);
 }
 
 function editRecurring(rec) {
@@ -439,6 +461,7 @@ function editRecurring(rec) {
       <div class="field"><label>${t('End date (optional)')}</label><input name="end_date" type="date" value="${esc(row.end_date || '')}"></div>
       <div class="field"><label>${t('Tax rate %')}</label><input name="tax_rate" type="number" min="0" step="any" value="${num(row.tax_rate)}"></div>
       <div class="field"><label>${t('Notes')}</label><input name="notes" value="${esc(row.notes || '')}"></div>
+      <div class="field full"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="auto_post"${row.auto_post ? ' checked' : ''} style="width:auto"> ${t('Create as sent (post stock and accounting immediately — otherwise drafts for review)')}</label></div>
     </div>
     <div class="lines-head"><h4>${t('Line items')}</h4><button type="button" class="secondary-btn add-line">+ ${t('Add line')}</button></div>
     <table class="lines"><thead><tr><th style="width:32%">${t('Product')}</th><th>${t('Description')}</th><th style="width:80px">${t('Qty')}</th><th style="width:110px">${t('Unit price')}</th><th style="width:80px">${t('Total')}</th><th></th></tr></thead>
@@ -474,6 +497,8 @@ function editRecurring(rec) {
       notes: form.querySelector('[name=notes]').value.trim(),
       items,
     };
+    out.auto_post = !!(form.querySelector('[name=auto_post]') && form.querySelector('[name=auto_post]').checked);
+    out.anchor_day = parseInt((out.next_date || '').slice(8, 10), 10) || null;
     if (inServerMode()) {
       txCall('recurring-save', { id: rec && rec.id, out }, t('Recurring template saved'));
       closeModal();
@@ -489,7 +514,6 @@ function editRecurring(rec) {
 }
 
 function renderInvoices() {
-  runRecurringInvoices(true);
   const rows = store.data.invoices.slice().sort((a, b) => b.created_at < a.created_at ? -1 : 1);
   const body = rows.map(inv => {
     const c = inv.contact_id ? store.contact(inv.contact_id) : null;
@@ -519,10 +543,11 @@ function renderInvoices() {
     return `<tr>
       <td><div class="cell-main">${c ? esc(contactName(c)) : '—'}</div><div class="cell-sub">${(r.items || []).length} ${t('items')}</div></td>
       <td>${t(r.interval)}</td>
-      <td><div>${esc(r.next_date || '—')}</div><div class="cell-sub">${r.end_date ? `${t('until')} ${esc(r.end_date)}` : ''}</div></td>
+      <td><div>${esc(r.next_date || '—')}${recurringDueCount(r) ? ` <span class="badge inactive">${recurringDueCount(r)} ${t('due')}</span>` : ''}</div><div class="cell-sub">${r.end_date ? `${t('until')} ${esc(r.end_date)}` : ''}</div></td>
       <td>${money(total)}</td>
       <td><span class="badge ${r.status === 'active' ? 'won' : r.status === 'completed' ? 'lead' : 'inactive'}">${t(r.status)}</span></td>
       <td class="row-actions">
+        ${r.status === 'active' ? `<button class="icon-btn" data-ract="run" data-id="${r.id}" title="${t('Run now')}">🚀</button>` : ''}
         ${r.status !== 'completed' ? `<button class="icon-btn" data-ract="${r.status === 'active' ? 'pause' : 'resume'}" data-id="${r.id}" title="${r.status === 'active' ? t('Pause') : t('Resume')}">${r.status === 'active' ? '⏸' : '▶️'}</button>` : ''}
         <button class="icon-btn" data-ract="edit" data-id="${r.id}" title="${t('Edit')}">✏️</button>
         <button class="danger-btn" data-ract="del" data-id="${r.id}" title="${t('Delete')}">🗑</button>
@@ -553,6 +578,7 @@ function renderInvoices() {
     const rec = store.data.recurring.find(x => x.id === id);
     if (!rec) return;
     const act = btn.dataset.ract;
+    if (act === 'run') { runRecurringTemplate(parseInt(btn.dataset.id, 10)); return; }
     if (act === 'edit') { editRecurring(rec); return; }
     if (act === 'del') { confirmDelete(t('Recurring invoice'), () => {
       if (inServerMode()) { txCall('recurring-delete', { id }, t('Recurring template deleted')); return; }

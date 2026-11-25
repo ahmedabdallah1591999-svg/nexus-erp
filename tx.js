@@ -569,6 +569,10 @@ const OPS = {
       need(/^\d{4}-\d{2}-\d{2}$/.test(out.next_date || ''), 'start date required');
       need(!out.end_date || /^\d{4}-\d{2}-\d{2}$/.test(out.end_date), 'bad end date');
       need(ctx.num(out.tax_rate) >= 0 && ctx.num(out.tax_rate) <= 100, 'bad tax rate');
+      out.auto_post = !!out.auto_post;
+      /* the anchor day keeps month-end schedules on their intended day
+         (Jan 31 -> Feb 28/29 -> Mar 31) instead of drifting */
+      out.anchor_day = Number(String(out.next_date).slice(8, 10));
       let r;
       if (p.id != null) {
         r = S.data.recurring.find(x => x.id === Number(p.id));
@@ -611,20 +615,29 @@ const OPS = {
       const S = ctx.store;
       const today = /^\d{4}-\d{2}-\d{2}$/.test(p.today || '') ? p.today : ctx.todayStr();
       const made = [], blocked = [];
-      for (const r of S.data.recurring) {
+      /* explicit user-triggered run only — never fired by opening a view.
+         Templates generate DRAFT invoices unless the template opts in to
+         auto-posting (auto_post), which posts stock and accounting. */
+      const list = p.id != null
+        ? S.data.recurring.filter(x => x.id === Number(p.id))
+        : S.data.recurring;
+      need(p.id == null || list.length === 1, 'recurring template not found');
+      for (const r of list) {
         let guard = 0;
         /* one invoice per elapsed period; advancing next_date per period
            makes a re-run idempotent, and a cap keeps a long-offline server
            from flooding the books */
         while (r.status === 'active' && r.next_date && r.next_date <= today && guard++ < 24) {
-          const lacking = (r.items || []).map(it => {
-            if (it.product_id == null) return null;
-            const prod = S.data.products.find(x => x.id === Number(it.product_id));
-            return prod && ctx.num(prod.stock) < ctx.num(it.qty) ? prod : null;
-          }).find(x => x);
-          if (lacking) { blocked.push(`${lacking.name} (${r.next_date})`); break; }
+          if (r.auto_post) {
+            const lacking = (r.items || []).map(it => {
+              if (it.product_id == null) return null;
+              const prod = S.data.products.find(x => x.id === Number(it.product_id));
+              return prod && ctx.num(prod.stock) < ctx.num(it.qty) ? prod : null;
+            }).find(x => x);
+            if (lacking) { blocked.push(`${lacking.name} (${r.next_date})`); break; }
+          }
           ctx.saveInvoice(null, {
-            status: 'sent', contact_id: r.contact_id, deal_id: null,
+            status: r.auto_post ? 'sent' : 'draft', contact_id: r.contact_id, deal_id: null,
             issue_date: r.next_date, due_date: r.next_date,
             tax_rate: r.tax_rate || 0, notes: r.notes || '',
             items: r.items.map(it => ({ ...it })),
@@ -633,7 +646,7 @@ const OPS = {
           const inv = S.data.invoices[S.data.invoices.length - 1];
           r.last_invoice_id = inv.id;
           made.push(inv.number);
-          r.next_date = ctx.advanceDate(r.next_date, r.interval);
+          r.next_date = ctx.advanceDate(r.next_date, r.interval, r.anchor_day);
           if (r.end_date && r.next_date > r.end_date) r.status = 'completed';
         }
       }

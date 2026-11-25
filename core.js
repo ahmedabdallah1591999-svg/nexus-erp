@@ -231,19 +231,24 @@ function txCall(op, payload, okMsg) {
 }
 function inServerMode() { return typeof Sync !== 'undefined' && Sync.authoritative && Sync.authoritative(); }
 
-/* Advance an ISO date (yyyy-mm-dd) by a recurring interval, UTC-safe and
-   clamped to the end of the target month (Jan 31 + 1 month = Feb 28/29). */
-function advanceDate(iso, interval) {
+/* Advance an ISO date (yyyy-mm-dd) by a recurring interval, UTC-safe.
+   Monthly and longer intervals keep the template's anchor day-of-month,
+   clamped to the target month's length: Jan 31 -> Feb 28/29 -> Mar 31,
+   never drifting to the 28th forever. */
+function advanceDate(iso, interval, anchorDay) {
   const [y, m, dd] = String(iso).split('-').map(Number);
-  const d = new Date(Date.UTC(y, m - 1, dd));
-  if (interval === 'weekly') d.setUTCDate(d.getUTCDate() + 7);
-  else {
-    const months = interval === 'monthly' ? 1 : interval === 'quarterly' ? 3 : 12;
-    const target = (d.getUTCMonth() + months) % 12;
-    d.setUTCMonth(d.getUTCMonth() + months);
-    if (d.getUTCMonth() !== target) d.setUTCDate(0);
+  if (interval === 'weekly') {
+    const d = new Date(Date.UTC(y, m - 1, dd));
+    d.setUTCDate(d.getUTCDate() + 7);
+    return d.toISOString().slice(0, 10);
   }
-  return d.toISOString().slice(0, 10);
+  const months = interval === 'monthly' ? 1 : interval === 'quarterly' ? 3 : 12;
+  const anchor = Math.max(1, Math.min(31, Number(anchorDay) || dd));
+  const total = (m - 1) + months;
+  const ty = y + Math.floor(total / 12);
+  const tm = total % 12;
+  const dim = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(ty, tm, Math.min(anchor, dim))).toISOString().slice(0, 10);
 }
 
 /* ---------------- Search ---------------- */
