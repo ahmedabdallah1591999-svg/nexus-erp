@@ -139,7 +139,7 @@ function openPurchases() {
 
 function paymentFields(direction) {
   if (direction === 'in') {
-    const opts = openInvoices().map(i => ({
+    const options = openInvoices().map(i => ({
       value: i.id,
       label: `${i.number} — ${contactName(store.contact(i.contact_id)) || ''} (${t('open')}: ${money(invoiceOpenAmount(i))})`,
     }));
@@ -151,7 +151,7 @@ function paymentFields(direction) {
       { key: 'memo', label: t('Memo'), value: '', full: true },
     ];
   }
-  const opts = openPurchases().map(p => ({
+  const options = openPurchases().map(p => ({
     value: p.id,
     label: `${p.number} — ${(store.data.suppliers.find(s => s.id === p.supplier_id) || {}).name || ''} (${t('open')}: ${money(purchaseOpenAmount(p))})`,
   }));
