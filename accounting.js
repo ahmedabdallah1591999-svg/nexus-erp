@@ -26,6 +26,7 @@ const DEFAULT_COA = [
   { code: '6200', name: 'Depreciation Expense', type: 'expense' },
   { code: '6900', name: 'Loss on Disposal', type: 'expense' },
   { code: '7100', name: 'Gain on Disposal', type: 'revenue' },
+  { code: '5200', name: 'Manufacturing Variance', type: 'expense' },
 ];
 
 function ensureCOA() {
@@ -383,11 +384,26 @@ function renderAccounting() {
   const mismatches = typeof settlementMismatches === 'function' ? settlementMismatches() : [];
   const mismatchTotal = Math.round(mismatches.reduce((s, m) => s + m.amount, 0) * 100) / 100;
   const isAdmin2 = Auth.current && Auth.current.role === 'admin';
+  const mismatchRows = mismatches.map(m => {
+    const inv = (store.data.invoices || []).find(x => x.id === m.payment.ref_id);
+    const refLabel = inv ? (inv.number || ('#' + inv.id)) : (m.payment.ref_type + ' #' + m.payment.ref_id);
+    return `<tr>
+      <td><input type="checkbox" class="reclass-sel" data-id="${m.payment.id}" aria-label="${t('Select payment')} ${esc(refLabel)}"></td>
+      <td>${esc(m.payment.date || '—')}</td>
+      <td><div class="cell-main">${esc(refLabel)}</div><div class="cell-sub">${t('Payment')} #${m.payment.id}</div></td>
+      <td><span class="badge inactive">${esc(m.payment.method)}</span></td>
+      <td>${money(m.amount)}</td>
+      <td class="cell-sub">1000 ${t('Cash')} → 1010 ${t('Bank')}</td>
+    </tr>`;
+  }).join('');
   const reclassCard = mismatches.length ? `<div class="card" style="border-color:var(--yellow, #d97706)">
     <h3>${t('Legacy settlement review')}</h3>
     <p>${mismatches.length} ${t('payment(s) recorded as bank/transfer/card were posted to the cash account before the settlement fix')} — ${t('total')} <strong>${money(mismatchTotal)}</strong>.</p>
-    <p class="cell-sub">${t('Review where the money actually arrived, then approve a dated reclass to the bank account (Dr 1010 / Cr 1000). Original entries stay untouched; refunds of these sales stay blocked until the review.')}</p>
-    ${isAdmin2 ? `<button class="primary-btn" id="approveReclass">${t('Approve and post reclass')}</button>`
+    <p class="cell-sub">${t('Check each payment against where the money actually arrived, select only the confirmed mismatches, then approve. A dated reclass posts per selection (Dr 1010 / Cr 1000); original entries stay untouched; refunds of these sales stay blocked until reviewed. Method label alone is not proof — verify against bank records first.')}</p>
+    <div class="table-wrap"><table class="data">
+      <thead><tr><th></th><th>${t('Date')}</th><th>${t('Reference')}</th><th>${t('Method')}</th><th>${t('Amount')}</th><th>${t('Original → Proposed')}</th></tr></thead>
+      <tbody>${mismatchRows}</tbody></table></div>
+    ${isAdmin2 ? `<button class="primary-btn" id="approveReclass" disabled>${t('Approve reclass for selected')}</button>`
                : `<p><strong>${t('Waiting for an admin to review and approve.')}</strong></p>`}
   </div>` : '';
 
@@ -438,10 +454,17 @@ function renderAccounting() {
 
   $('#addJournal').onclick = addJournalEntry;
   const rcBtn = $('#approveReclass');
-  if (rcBtn) rcBtn.onclick = () => {
-    if (inServerMode()) { txCall('reclass-settlement', { all: true }, t('Reclass posted — settlements aligned')); return; }
-    toast(t('Reclass needs the server.'));
-  };
+  if (rcBtn) {
+    document.querySelectorAll('.reclass-sel').forEach(cb => {
+      cb.onchange = () => { rcBtn.disabled = !document.querySelectorAll('.reclass-sel:checked').length; };
+    });
+    rcBtn.onclick = () => {
+      const ids = Array.from(document.querySelectorAll('.reclass-sel:checked')).map(cb => Number(cb.dataset.id));
+      if (!ids.length) return;
+      if (inServerMode()) { txCall('reclass-settlement', { ids }, t('Reclass posted — settlements aligned')); return; }
+      toast(t('Reclass needs the server.'));
+    };
+  }
   const apBtn = $('#approveInvAdj');
   if (apBtn) apBtn.onclick = () => {
     if (inServerMode()) { txCall('migrate-inventory', {}, t('Adjustment posted — books reconciled')); return; }

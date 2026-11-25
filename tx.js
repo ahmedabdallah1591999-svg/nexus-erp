@@ -29,7 +29,7 @@ const MODULE_FILES = ['i18n.js', 'i18n-extra.js', 'core.js', 'seed.js', 'crm.js'
 /* Collections only the server may write (never accepted from a client PUT). */
 const SERVER_OWNED = new Set(['accounts', 'journal', 'payments', 'warehouses', 'stock_moves',
   'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring', 'expenses', 'projects', 'timesheets',
-  'tickets', 'ticket_replies', 'leave_requests', 'attendance', 'assets', 'pos_shifts']);
+  'tickets', 'ticket_replies', 'leave_requests', 'attendance', 'assets', 'pos_shifts', 'production']);
 
 /* ---------------- browser sandbox ---------------- */
 
@@ -769,7 +769,10 @@ const OPS = {
         ['bank', 'transfer', 'card'].includes(pay.method) && pay.journal_id &&
         (((S.data.journal || []).find(j => j.id === pay.journal_id) || {}).lines || [])
           .some(l => ctx.num(l.debit) > 0 && l.account_id === cash.id));
-      const targets = p.all ? rows : rows.filter(pay => pay.id === Number(p.id));
+      let targets;
+      if (Array.isArray(p.ids)) targets = rows.filter(pay => p.ids.map(Number).includes(pay.id));
+      else if (p.all) targets = rows;
+      else targets = rows.filter(pay => pay.id === Number(p.id));
       need(targets.length, 'no matching legacy settlement to reclass');
       let posted = 0, total = 0;
       for (const pay of targets) {
@@ -785,6 +788,78 @@ const OPS = {
         posted++; total += amt;
       }
       return { posted, total: Math.round(total * 100) / 100 };
+    },
+  },
+
+  /* Manufacturing: a BOM is the component recipe stored on the finished
+     product. Products are server-owned, so the recipe changes only here. */
+  'bom-save': {
+    view: 'manufacturing',
+    run(ctx, p) {
+      const S = ctx.store;
+      const prod = S.data.products.find(x => x.id === Number(p.product_id));
+      need(prod, 'product not found');
+      const bom = [];
+      for (const l of (Array.isArray(p.lines) ? p.lines : [])) {
+        const cid = Number(l.product_id), q = ctx.num(l.qty);
+        if (!cid) continue;
+        need(cid !== prod.id, 'a product cannot be its own component');
+        need(S.data.products.some(x => x.id === cid), 'component product not found');
+        need(q > 0, 'component quantity must be positive');
+        bom.push({ product_id: cid, qty: q });
+      }
+      prod.bom = bom;
+      S.save();
+      return { product_id: prod.id, bom };
+    },
+  },
+
+  /* Production run: validates component availability, consumes components
+     and outputs finished goods as stock moves, and posts Dr Inventory
+     (finished at product cost) / Cr Inventory (components at their cost).
+     The net inside 1200 exactly matches the stock-valuation change, so the
+     GL-vs-ledger invariant holds with no variance account and no
+     fabrication: finished goods carry the product's stated cost. */
+  'produce': {
+    view: 'manufacturing',
+    run(ctx, p) {
+      const S = ctx.store;
+      const prod = S.data.products.find(x => x.id === Number(p.product_id));
+      need(prod, 'product not found');
+      const qty = ctx.num(p.qty);
+      need(qty > 0, 'quantity must be positive');
+      need(Array.isArray(prod.bom) && prod.bom.length, 'product has no bill of materials');
+      for (const l of prod.bom) {
+        const comp = S.data.products.find(x => x.id === l.product_id);
+        need(comp, 'component product not found');
+        need(ctx.num(comp.stock) + 1e-9 >= ctx.num(l.qty) * qty, `${ctx.t('Insufficient stock for')} ${comp.name}`);
+      }
+      const rec = S.add('production', { date: ctx.todayStr(), product_id: prod.id, qty, status: 'done' });
+      let compCost = 0;
+      for (const l of prod.bom) {
+        const comp = S.data.products.find(x => x.id === l.product_id);
+        compCost += ctx.num(comp.cost) * ctx.num(l.qty) * qty;
+        ctx.recordStockMove({ product_id: comp.id, qty: -ctx.num(l.qty) * qty, reason: 'production-consume', ref_type: 'production', ref_id: rec.id, memo: prod.name });
+      }
+      ctx.recordStockMove({ product_id: prod.id, qty, reason: 'production-output', ref_type: 'production', ref_id: rec.id, memo: prod.name });
+      compCost = Math.round(compCost * 100) / 100;
+      const outVal = Math.round(ctx.num(prod.cost) * qty * 100) / 100;
+      const invAcc = ctx.accountByCode('1200'), varAcc = ctx.accountByCode('5200');
+      /* balanced entry in all cost configurations: finished goods in at
+         product cost, components out at their cost, the difference to
+         Manufacturing Variance (debit unfavorable, credit favorable) */
+      const lines = [];
+      if (outVal > 0) lines.push({ account_id: invAcc.id, debit: outVal });
+      if (compCost > 0) lines.push({ account_id: invAcc.id, credit: compCost });
+      const diff = Math.round((outVal - compCost) * 100) / 100;
+      if (diff > 0) lines.push({ account_id: varAcc.id, credit: diff });
+      else if (diff < 0) lines.push({ account_id: varAcc.id, debit: -diff });
+      if (lines.length >= 2) {
+        const e = ctx.postJournal({ date: ctx.todayStr(), memo: `${ctx.t('Production')}: ${prod.name} × ${qty}`, ref_type: 'production', ref_id: rec.id, lines });
+        need(e, 'production journal failed');
+      }
+      S.save();
+      return { production: rec, component_cost: compCost, output_value: outVal, variance: -diff };
     },
   },
 

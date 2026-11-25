@@ -47,7 +47,7 @@ const COLLECTION_VIEW = {
   tickets: 'helpdesk', ticket_replies: 'helpdesk',
   leave_requests: ['employees', 'hr-self'], attendance: ['employees', 'hr-self'],
   assets: 'assets',
-  pos_shifts: 'pos',
+  pos_shifts: 'pos', production: 'manufacturing',
   activities: 'contacts', products: 'products', suppliers: 'suppliers',
   invoices: 'invoices', purchases: 'purchases', ledger: 'finance', expenses: ['finance', 'expenses'], recurring: 'invoices',
   employees: 'employees', notes: 'notes', accounts: 'accounting', journal: 'accounting', payments: 'payments',
@@ -63,7 +63,7 @@ function emptyDb() {
     data: {
       meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1, orderSeq: 1, returnSeq: 1, ticketSeq: 1 },
       companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [], projects: [], timesheets: [], tickets: [], ticket_replies: [],
-      leave_requests: [], attendance: [], assets: [], pos_shifts: [],
+      leave_requests: [], attendance: [], assets: [], pos_shifts: [], production: [],
       products: [], suppliers: [], invoices: [], purchases: [], sales_orders: [], returns: [], recurring: [],
       ledger: [], expenses: [], employees: [], notes: [], messages: [], accounts: [], journal: [], payments: [],
       warehouses: [], stock_moves: [], settings: {},
@@ -208,7 +208,7 @@ const api = {
       if (!username || password.length < 4) return json(res, 400, { error: 'invalid' });
       const salt = crypto.randomBytes(16).toString('hex');
     const u = { id: 1, username, salt, hash: hashPassword(salt, password), role: 'admin',
-      modules: ['dashboard','contacts','companies','deals','tasks','notes','quotes','orders','invoices','products','stock','purchases','suppliers','finance','accounting','payments','employees','reports','contact'],
+      modules: ['dashboard','contacts','companies','deals','tasks','notes','quotes','orders','invoices','products','stock','manufacturing','purchases','suppliers','finance','accounting','payments','employees','reports','contact'],
       mustChange: false, created_at: new Date().toISOString() };
       db.users.push(u);
       saveJson(DB_FILE, db);

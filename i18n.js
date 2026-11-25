@@ -56,6 +56,11 @@ function localeTag() {
 
 function applyStaticTranslations() {
   document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+  // Icon-only rail (narrow screens) still exposes module names as tooltips/accessible names
+  document.querySelectorAll('.nav-item').forEach(b => {
+    const lbl = b.querySelector('span[data-i18n]');
+    if (lbl && lbl.textContent.trim()) { b.title = lbl.textContent.trim(); b.setAttribute('aria-label', b.title); }
+  });
   document.querySelectorAll('[data-i18n-ph]').forEach(el => { el.placeholder = t(el.dataset.i18nPh); });
   document.querySelectorAll('[data-i18n-title]').forEach(el => { el.title = t(el.dataset.i18nTitle); });
 }
