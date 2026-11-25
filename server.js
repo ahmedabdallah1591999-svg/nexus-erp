@@ -68,6 +68,7 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 let db = loadJson(DB_FILE, null);
 if (!db || !db.data || !db.users) { db = emptyDb(); saveJson(DB_FILE, db); }
 let sessions = loadJson(SESSIONS_FILE, {}); // token -> username
+const loginFails = new Map(); // ip -> {count, first} — simple brute-force brake
 
 /* ---------------- password hashing (scrypt) ---------------- */
 
@@ -136,26 +137,41 @@ const api = {
   'GET /api/ping': (req, res) => json(res, 200, { ok: true, server: true, needsSetup: db.users.length === 0 }),
 
   'POST /api/setup': async (req, res) => {
-    if (db.users.length) return json(res, 409, { error: 'already set up' });
-    const b = await readBody(req);
-    const username = String(b.username || '').trim();
-    const password = String(b.password || '');
-    if (!username || password.length < 4) return json(res, 400, { error: 'invalid' });
-    const salt = crypto.randomBytes(16).toString('hex');
+    if (db.users.length || api._setupBusy) return json(res, 409, { error: 'already set up' });
+    api._setupBusy = true;
+    try {
+      const b = await readBody(req);
+      /* Re-check AFTER the async body read: two simultaneous setup attempts
+         must not both pass — only the first creates the admin. */
+      if (db.users.length) return json(res, 409, { error: 'already set up' });
+      const username = String(b.username || '').trim();
+      const password = String(b.password || '');
+      if (!username || password.length < 4) return json(res, 400, { error: 'invalid' });
+      const salt = crypto.randomBytes(16).toString('hex');
     const u = { id: 1, username, salt, hash: hashPassword(salt, password), role: 'admin',
       modules: ['dashboard','contacts','companies','deals','tasks','notes','invoices','products','purchases','suppliers','finance','employees','reports','contact'],
       mustChange: false, created_at: new Date().toISOString() };
-    db.users.push(u);
-    saveJson(DB_FILE, db);
-    const token = crypto.randomBytes(24).toString('hex');
-    sessions[token] = u.username; saveJson(SESSIONS_FILE, sessions);
-    json(res, 200, { token, user: publicUser(u) });
+      db.users.push(u);
+      saveJson(DB_FILE, db);
+      const token = crypto.randomBytes(24).toString('hex');
+      sessions[token] = u.username; saveJson(SESSIONS_FILE, sessions);
+      json(res, 200, { token, user: publicUser(u) });
+    } finally { api._setupBusy = false; }
   },
 
   'POST /api/login': async (req, res) => {
+    const ip = (req.socket && req.socket.remoteAddress) || 'unknown';
+    const now = Date.now();
+    const rec = loginFails.get(ip) || { count: 0, first: now };
+    if (now - rec.first > 5 * 60 * 1000) { rec.count = 0; rec.first = now; }
+    if (rec.count >= 10) return json(res, 429, { error: 'too many attempts, wait a few minutes' });
     const b = await readBody(req);
     const u = db.users.find(x => x.username.toLowerCase() === String(b.username || '').toLowerCase());
-    if (!u || !checkPassword(u, String(b.password || ''))) return json(res, 401, { error: 'bad credentials' });
+    if (!u || !checkPassword(u, String(b.password || ''))) {
+      rec.count++; loginFails.set(ip, rec);
+      return json(res, 401, { error: 'bad credentials' });
+    }
+    loginFails.delete(ip);
     const token = crypto.randomBytes(24).toString('hex');
     sessions[token] = u.username; saveJson(SESSIONS_FILE, sessions);
     json(res, 200, { token, user: publicUser(u) });

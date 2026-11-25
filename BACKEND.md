@@ -61,6 +61,25 @@ first login; the server stores only salted scrypt hashes.
 `PUT /api/data` (per-section enforcement) · `POST /api/messages` (any user) ·
 `GET|POST|PATCH|DELETE /api/users` (admin)
 
+## Security notes (reviewed 25 Nov 2026)
+
+- **Passwords**: salted scrypt hashes only; the list never leaves the server.
+- **Sessions**: random 192-bit tokens in `data/sessions.json`; the app keeps
+  them in sessionStorage (closing the browser tab ends the session).
+- **Brute-force brake**: 10 failed logins from one address within 5 minutes →
+  HTTP 429 until the window passes (the correct password is also refused
+  during the lockout — wait ~5 minutes).
+- **First-admin race**: concurrent setup attempts are serialized — exactly one
+  admin can be created, verified with parallel requests.
+- **Section enforcement**: reads AND writes are filtered per user on the
+  server; a restricted employee's forged write to another section is
+  discarded, and their Excel export cannot contain it (tested).
+- **Messages**: any signed-in user can send; only the admin reads/manages.
+- **HTTP exposure (accepted limit)**: on the office LAN, traffic is not
+  encrypted — someone with access to the office network could capture a
+  session token. Acceptable inside a trusted LAN; do NOT expose the server to
+  the internet. If that ever changes, put it behind HTTPS first.
+
 ## Honest limits
 
 - **Backups are your job**: copy `data/store.json` somewhere safe regularly
