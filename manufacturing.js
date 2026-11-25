@@ -53,7 +53,8 @@ function renderManufacturing() {
 
   $('#view-manufacturing').innerHTML = `
     <div class="view-head">
-      <div><h2>${t('Manufacturing')}</h2><div class="sub">${t('Bills of materials and production runs — components out, finished goods in, books posted live')}</div></div>
+      <div><h2>${t('Manufacturing')}</h2><div class="sub">${t('Bills of materials and production runs — components out, finished goods in, books posted live')}</div>
+      <div class="sub">${t('Scope: single-level BOM stock conversion with variance accounting. Not production planning, work centers or WIP tracking.')}</div></div>
     </div>
     ${serverUp ? '' : `<div class="card" style="border-color:var(--red)"><p><strong>${t('Manufacturing needs the server.')}</strong></p></div>`}
     <div class="card"><h3>${t('Bill of materials')}</h3>
@@ -114,7 +115,11 @@ function renderManufacturing() {
   if (goBtn) goBtn.onclick = () => {
     const pid = Number($('#runProduct').value), q = num($('#runQty').value);
     if (!pid || !(q > 0)) return;
-    txCall('produce', { product_id: pid, qty: q }, t('Production recorded'));
+    /* one client_ref per click: a retry or double submit returns the
+       original run server-side instead of double-producing */
+    goBtn.disabled = true;
+    const ref = 'mfg-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    txCall('produce', { product_id: pid, qty: q, client_ref: ref }, t('Production recorded'));
   };
 }
 

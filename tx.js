@@ -792,7 +792,10 @@ const OPS = {
   },
 
   /* Manufacturing: a BOM is the component recipe stored on the finished
-     product. Products are server-owned, so the recipe changes only here. */
+     product. Products are server-owned, so the recipe changes only here.
+     Scope: single-level recipes (direct components only, no explosion).
+     Recipe shapes we do not support are rejected, never half-applied:
+     duplicate components and direct/indirect cycles. */
   'bom-save': {
     view: 'manufacturing',
     run(ctx, p) {
@@ -806,8 +809,21 @@ const OPS = {
         need(cid !== prod.id, 'a product cannot be its own component');
         need(S.data.products.some(x => x.id === cid), 'component product not found');
         need(q > 0, 'component quantity must be positive');
+        need(!bom.some(x => x.product_id === cid), 'duplicate component — combine the quantities into one line');
+        const compProd = S.data.products.find(x => x.id === cid);
+        need(!(compProd && Array.isArray(compProd.bom) && compProd.bom.length), `multi-level recipes are not supported — ${compProd ? compProd.name : cid} has its own bill of materials`);
         bom.push({ product_id: cid, qty: q });
       }
+      /* indirect cycle: no component may reach this product through its
+         own BOM (A needs B, B needs A), directly or transitively */
+      const reaches = (fromId, targetId, seen) => {
+        if (fromId === targetId) return true;
+        if (seen.has(fromId)) return false;
+        seen.add(fromId);
+        const f = S.data.products.find(x => x.id === fromId);
+        return (f && Array.isArray(f.bom) ? f.bom : []).some(l => reaches(l.product_id, targetId, seen));
+      };
+      for (const l of bom) need(!reaches(l.product_id, prod.id, new Set()), 'circular recipe — a component already contains this product in its own bill of materials');
       prod.bom = bom;
       S.save();
       return { product_id: prod.id, bom };
@@ -824,6 +840,13 @@ const OPS = {
     view: 'manufacturing',
     run(ctx, p) {
       const S = ctx.store;
+      /* exactly-once: a retried/duplicated submit carrying the same
+         client_ref returns the original run instead of double-producing
+         (same pattern as POS sales) */
+      if (p.client_ref) {
+        const dup = (S.data.production || []).find(r => r.client_ref === p.client_ref);
+        if (dup) return { production: dup, deduped: true };
+      }
       const prod = S.data.products.find(x => x.id === Number(p.product_id));
       need(prod, 'product not found');
       const qty = ctx.num(p.qty);
@@ -834,7 +857,7 @@ const OPS = {
         need(comp, 'component product not found');
         need(ctx.num(comp.stock) + 1e-9 >= ctx.num(l.qty) * qty, `${ctx.t('Insufficient stock for')} ${comp.name}`);
       }
-      const rec = S.add('production', { date: ctx.todayStr(), product_id: prod.id, qty, status: 'done' });
+      const rec = S.add('production', { date: ctx.todayStr(), product_id: prod.id, qty, status: 'done', client_ref: p.client_ref || null });
       let compCost = 0;
       for (const l of prod.bom) {
         const comp = S.data.products.find(x => x.id === l.product_id);
