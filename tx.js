@@ -1459,6 +1459,7 @@ const OPS = {
       need(q, 'inspection not found');
       need(q.status === 'open', 'a closed inspection cannot be changed');
       need(['pass', 'fail'].includes(p.result), 'result must be pass or fail');
+      need(!(q.result === 'fail' && p.result === 'pass'), 'a recorded failure cannot be changed to pass: close it with a corrective action (or an admin voids it with a reason)');
       const failed = p.result === 'fail' ? qcQty(p.qty_failed, 'failed quantity') : 0;
       if (p.result === 'fail') need(failed <= q.qty_inspected, 'failed quantity cannot exceed the inspected quantity');
       q.result = p.result; q.qty_failed = failed;
@@ -1525,7 +1526,7 @@ const OPS = {
       if (p.id) {
         const d = (S.data.documents || []).find(x => x.id === Number(p.id));
         need(d, 'document not found');
-        need(d.status !== 'approved', 'an approved document is locked: revise it to change it');
+        need(d.status === 'draft', 'only a draft can be edited: send a document in review back to draft, or revise an approved one');
         Object.assign(d, { title: String(out.title).trim(), doc_type: DT.includes(out.doc_type) ? out.doc_type : d.doc_type,
           location: String(out.location || ''), summary: String(out.summary || ''), updated_at: now });
         S.save();
@@ -2040,6 +2041,7 @@ const OPS = {
       const S = ctx.store;
       /* one open shift per cashier at a time */
       need(!(S.data.pos_shifts || []).some(x => x.status === 'open' && x.cashier === user.username), 'you already have an open shift');
+      need(p.opening_float == null || p.opening_float === '' || (Number.isFinite(Number(p.opening_float)) && Number(p.opening_float) >= 0 && Number(p.opening_float) <= 1e9), 'opening float must be zero or more');
       const row = S.add('pos_shifts', {
         cashier: user.username, status: 'open', opened_at: new Date().toISOString(),
         opening_float: Math.round(ctx.num(p.opening_float) * 100) / 100,
@@ -2062,6 +2064,7 @@ const OPS = {
       /* closing records the count and the variance; it never posts a
          financial adjustment — a variance stays a review item, not a book
          entry nobody approved */
+      need(Number.isFinite(Number(p.counted_cash)) && Number(p.counted_cash) >= 0 && Number(p.counted_cash) <= 1e9, 'counted cash must be zero or more');
       const counted = Math.round(ctx.num(p.counted_cash) * 100) / 100;
       /* expected CASH only: card/transfer sales never entered the till, and
          refunds paid out in cash reduce it */

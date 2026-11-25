@@ -229,5 +229,32 @@ ok('M6 concurrent same ref: exactly one real run',res.count(None)+res.count(Fals
 d=call('GET','/api/data',tok=tok)[1]['data']; fgs=[p for p in d['products'] if p['id']==fp][0]['stock']
 ok('M7 finished stock 8 (5+3), components 20-16=4',fgs==8 and [p for p in d['products'] if p['id']==cp][0]['stock']==4,fgs)
 ok('M8 invariants after production',not invariants(d),invariants(d))
+
+# ---- POS shifts, quality, documents ----
+call('POST','/api/users',{'username':'cash','password':'cash-pass-1','role':'employee','modules':['pos']},tok=tok)
+ctok=login('cash','cash-pass-1')[0]
+ok('P3 negative opening float refused',tx({'op':'pos-shift-open','opening_float':-5},ctok)[0]==400)
+sh=tx({'op':'pos-shift-open','opening_float':50},ctok)[1].get('shift',{}).get('id')
+ok('P4 second open shift refused',tx({'op':'pos-shift-open','opening_float':1},ctok)[0]==400)
+ok('P5 other cashier/no-admin cannot close it',tx({'op':'pos-shift-close','id':sh,'counted_cash':50},itok)[0]==403)
+ok('P6 negative count refused',tx({'op':'pos-shift-close','id':sh,'counted_cash':-1},ctok)[0]==400)
+r=tx({'op':'pos-shift-close','id':sh,'counted_cash':45},ctok); ok('P7 close records variance -5, posts nothing',r[0]==200 and r[1]['shift']['variance']==-5,r)
+ok('P8 double close refused',tx({'op':'pos-shift-close','id':sh,'counted_cash':45},ctok)[0]==400)
+ok('P9 closed shift cannot take a sale',tx({'op':'pos-sale','client_ref':'late1','shift_id':sh,'method':'cash','items':[{'product_id':pid,'qty':1}]},ctok)[0]==400)
+call('POST','/api/users',{'username':'qa1','password':'qa1-pass-1','role':'employee','modules':['quality']},tok=tok)
+call('POST','/api/users',{'username':'qa2','password':'qa2-pass-1','role':'employee','modules':['quality']},tok=tok)
+q1=login('qa1','qa1-pass-1')[0]; q2=login('qa2','qa2-pass-1')[0]
+qc=tx({'op':'qc-save','out':{'title':'T','qty_inspected':10}},q1)[1].get('check',{}).get('id')
+ok('Q1 fail recorded',tx({'op':'qc-result','id':qc,'result':'fail','qty_failed':3},q1)[0]==200)
+ok('Q2 failure cannot be flipped to pass',tx({'op':'qc-result','id':qc,'result':'pass'},q1)[0]==400)
+ok('Q3 close needs corrective action',tx({'op':'qc-close','id':qc,'corrective_action':'x'},q1)[0]==400 and tx({'op':'qc-close','id':qc,'corrective_action':'replace supplier lot'},q1)[0]==200)
+_q4=tx({'op':'qc-void','id':qc,'reason':'mistake here'},q1); ok('Q4 non-admin cannot void',_q4[0] in (400,403) and 'admin' in json.dumps(_q4[1]),_q4)
+dc=tx({'op':'doc-save','out':{'title':'SOP'}},q1)[1].get('document',{}).get('id')
+ok('D1 draft to review',tx({'op':'doc-status','id':dc,'status':'review'},q1)[0]==200)
+ok('D2 doc in review cannot be edited silently',tx({'op':'doc-save','id':dc,'out':{'title':'SOP changed'}},q2)[0]==400)
+ok('D3 owner cannot approve own doc',tx({'op':'doc-status','id':dc,'status':'approved'},q1)[0]==400)
+ok('D4 other user approves',tx({'op':'doc-status','id':dc,'status':'approved'},q2)[0]==200)
+ok('D5 approved cannot be edited or skipped to draft',tx({'op':'doc-save','id':dc,'out':{'title':'x'}},q2)[0]==400 and tx({'op':'doc-status','id':dc,'status':'draft'},q2)[0]==400)
+d=call('GET','/api/data',tok=tok)[1]['data']; ok('D6 invariants unchanged by non-financial modules',not invariants(d),invariants(d))
 print('matrix-test: PASS=%d FAIL=%d'%(PASS,FAIL))
 srv.terminate()

@@ -43,3 +43,4 @@ Not changed / still open: Windows scripts were reviewed but never run on Windows
 - Payroll admin-only, real month, no future month, duplicate runs for older months now blocked (month marker).
 - journal-reverse: only manual entries, once; document postings must be corrected via the document.
 - recurring-run date is server-owned (client cannot name a future date); real-calendar date checks on journal, ledger, expense, timesheet, assets; depreciation cannot post for future months; disposal cannot precede purchase or posted depreciation; deleting a draft time invoice releases the time.
+- POS shift amounts bounded; a recorded QC failure cannot be flipped to pass; documents editable only in draft.
