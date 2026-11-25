@@ -36,6 +36,7 @@ const COLLECTION_VIEW = {
   activities: 'contacts', products: 'products', suppliers: 'suppliers',
   invoices: 'invoices', purchases: 'purchases', ledger: 'finance',
   employees: 'employees', notes: 'notes', accounts: 'accounting', journal: 'accounting', payments: 'payments',
+  warehouses: 'stock', stock_moves: 'stock',
 };
 const ADMIN_ONLY = ['settings']; // app-wide settings stay with the admin
 
@@ -48,7 +49,8 @@ function emptyDb() {
       meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1 },
       companies: [], contacts: [], deals: [], tasks: [], activities: [],
       products: [], suppliers: [], invoices: [], purchases: [],
-      ledger: [], employees: [], notes: [], messages: [], accounts: [], journal: [], payments: [], settings: {},
+      ledger: [], employees: [], notes: [], messages: [], accounts: [], journal: [], payments: [],
+      warehouses: [], stock_moves: [], settings: {},
     },
   };
 }

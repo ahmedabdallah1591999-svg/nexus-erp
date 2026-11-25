@@ -284,11 +284,15 @@ function editInvoice(inv) {
   };
 }
 
-function applyStock(items, direction) {
+function applyStock(items, direction, ctx) {
   items.forEach(it => {
     if (!it.product_id) return;
-    const p = store.product(it.product_id);
-    if (p) p.stock = num(p.stock) + direction * num(it.qty);
+    if (typeof recordStockMove === 'function') {
+      recordStockMove({ product_id: it.product_id, qty: direction * num(it.qty), ...(ctx || {}) });
+    } else {
+      const p = store.product(it.product_id);
+      if (p) p.stock = num(p.stock) + direction * num(it.qty);
+    }
   });
 }
 
@@ -306,10 +310,10 @@ function saveInvoice(existing, out) {
   }
   // stock: applied once when the invoice leaves draft, returned if it goes back
   if (inv.status !== 'draft' && !inv.stock_applied) {
-    applyStock(inv.items, -1);
+    applyStock(inv.items, -1, { reason: 'invoice', ref_type: 'invoice', ref_id: inv.id });
     inv.stock_applied = true;
   } else if (inv.status === 'draft' && inv.stock_applied) {
-    applyStock(inv.items, +1);
+    applyStock(inv.items, +1, { reason: 'invoice-cancel', ref_type: 'invoice', ref_id: inv.id });
     inv.stock_applied = false;
   }
   // accrual book: AR/revenue when the invoice leaves draft, cash when paid
@@ -382,7 +386,7 @@ function renderInvoices() {
     if (btn.dataset.act === 'edit') editInvoice(inv);
     if (btn.dataset.act === 'paid') { saveInvoice(inv, { status: 'paid' }); toast(`${inv.number} ${t('marked paid')}`); render(); }
     if (btn.dataset.act === 'del') confirmDelete(`${t('invoice')} ${inv.number}`, () => {
-      if (inv.stock_applied) applyStock(inv.items, +1);
+      if (inv.stock_applied) applyStock(inv.items, +1, { reason: 'invoice-delete', ref_type: 'invoice', ref_id: inv.id });
       store.remove('invoices', id);
       store.save();
       toast(t('Invoice deleted'));
@@ -447,7 +451,7 @@ function editPurchase(po) {
       rec = store.add('purchases', out);
     }
     if (rec.status === 'received' && !rec.stock_applied) {
-      applyStock(rec.items.map(it => ({ product_id: it.product_id, qty: it.qty })), +1);
+      applyStock(rec.items.map(it => ({ product_id: it.product_id, qty: it.qty })), +1, { reason: 'purchase', ref_type: 'purchase', ref_id: rec.id });
       rec.stock_applied = true;
       rec.received_date = todayStr();
     }
@@ -507,7 +511,7 @@ function renderPurchases() {
     const po = store.data.purchases.find(x => x.id === id);
     if (btn.dataset.act === 'edit') editPurchase(po);
     if (btn.dataset.act === 'del') confirmDelete(`${t('purchase order')} ${po.number}`, () => {
-      if (po.stock_applied) applyStock(po.items.map(it => ({ product_id: it.product_id, qty: it.qty })), -1);
+      if (po.stock_applied) applyStock(po.items.map(it => ({ product_id: it.product_id, qty: it.qty })), -1, { reason: 'purchase-delete', ref_type: 'purchase', ref_id: po.id });
       store.remove('purchases', id);
       store.save();
       toast(t('Purchase order deleted'));

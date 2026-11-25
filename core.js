@@ -21,7 +21,7 @@ const App = { views: {}, quickAdd: {}, editors: {} };
 /* Display labels per view (used for access-control checkboxes). */
 const VIEW_LABELS = {
   dashboard: 'Dashboard', contacts: 'Contacts', companies: 'Companies', deals: 'Deals',
-  quotes: 'Quotes', accounting: 'Accounting', payments: 'Payments',
+  quotes: 'Quotes', accounting: 'Accounting', payments: 'Payments', stock: 'Stock ledger',
   tasks: 'Tasks', notes: 'Notes', invoices: 'Invoices', products: 'Inventory',
   purchases: 'Purchases', suppliers: 'Suppliers', finance: 'Finance', employees: 'Employees',
   reports: 'Reports', contact: 'Contact us',
@@ -35,7 +35,7 @@ function emptyData() {
     companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [],
     products: [], suppliers: [], invoices: [], purchases: [],
     ledger: [], employees: [], notes: [], messages: [],
-    accounts: [], journal: [], payments: [],
+    accounts: [], journal: [], payments: [], warehouses: [], stock_moves: [],
     settings: {},
   };
 }

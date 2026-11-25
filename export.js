@@ -350,6 +350,17 @@ function exportSheets() {
   });
 
   sheets.push({
+    name: t('Stock movements'),
+    view: 'stock',
+    rows: [[t('Date'), t('Product'), t('Warehouse'), t('Qty'), t('Reason'), t('Balance'), t('Memo')],
+      ...(d.stock_moves || []).map(m => {
+        const p = (d.products || []).find(x => x.id === m.product_id);
+        const w = (d.warehouses || []).find(x => x.id === m.warehouse_id);
+        return [m.date || '', p ? p.name : '', w ? w.name : '', m.qty, t(m.reason || ''), m.balance_after != null ? m.balance_after : '', m.memo || ''];
+      })],
+  });
+
+  sheets.push({
     name: t('Companies'),
     view: 'companies',
     rows: [[t('Company name'), t('Industry'), t('Email'), t('Phone'), t('Website'), t('Address'), t('Notes')],
