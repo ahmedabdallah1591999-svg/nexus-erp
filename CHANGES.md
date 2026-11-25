@@ -39,3 +39,7 @@ Not changed / still open: Windows scripts were reviewed but never run on Windows
 - Journal op rejects non-list lines (was an exception); malformed JSON gives 400 not 500.
 - Old returns flagged "Needs review" in the UI; no data rewritten.
 - See COVERAGE.md.
+- Revaluation narrowed to write-down only (see COVERAGE.md); increases blocked.
+- Payroll admin-only, real month, no future month, duplicate runs for older months now blocked (month marker).
+- journal-reverse: only manual entries, once; document postings must be corrected via the document.
+- recurring-run date is server-owned (client cannot name a future date); real-calendar date checks on journal, ledger, expense, timesheet, assets; depreciation cannot post for future months; disposal cannot precede purchase or posted depreciation; deleting a draft time invoice releases the time.

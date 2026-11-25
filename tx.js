@@ -27,6 +27,16 @@ const MODULE_FILES = ['i18n.js', 'i18n-extra.js', 'core.js', 'seed.js', 'crm.js'
   'sales.js', 'quotes.js', 'orders.js', 'accounting.js', 'payments.js', 'stock.js', 'finance.js'];
 
 /* Collections only the server may write (never accepted from a client PUT). */
+/* a real calendar date (YYYY-MM-DD), not just the right shape */
+function validDate(v) {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(v + 'T00:00:00Z');
+  return !isNaN(d) && d.toISOString().slice(0, 10) === v && v >= '2000-01-01' && v <= '2100-12-31';
+}
+const MAXAMT = 1e12;
+/* test seam only: lets the automated suites simulate future periods. Never set in normal use. */
+const FUTURE_OK = process.env.NEXUS_TEST_ALLOW_FUTURE === '1';
+
 const SERVER_OWNED = new Set(['accounts', 'journal', 'payments', 'warehouses', 'stock_moves',
   'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring', 'expenses', 'projects', 'timesheets',
   'tickets', 'ticket_replies', 'leave_requests', 'attendance', 'assets', 'pos_shifts', 'production', 'quality_checks', 'documents', 'credit_notes', 'purchase_returns']);
@@ -224,6 +234,8 @@ const OPS = {
          Drafts never posted anything and can be removed. */
       need(inv.status === 'draft' && !inv.journal_sent, 'only draft invoices can be deleted; reverse posted invoices instead');
       if (inv.stock_applied) ctx.applyStock(inv.items, +1, { reason: 'invoice-delete', ref_type: 'invoice', ref_id: inv.id });
+      /* time billed onto this draft becomes billable again */
+      for (const t of (S.data.timesheets || [])) if (t.billed_invoice_id === inv.id) t.billed_invoice_id = null;
       S.remove('invoices', inv.id);
       return { deleted: inv.id };
     },
@@ -294,6 +306,7 @@ const OPS = {
   'journal': {
     view: 'accounting',
     run(ctx, p) {
+      need(p.date == null || p.date === '' || validDate(p.date), 'date must be a real YYYY-MM-DD date');
       need(Array.isArray(p.lines) && p.lines.length <= 200 && p.lines.every(l => l && typeof l === 'object'), 'journal lines must be a list of line objects');
       const e = ctx.postJournal({ date: p.date, memo: p.memo, lines: p.lines });
       need(e, 'journal entry must have at least two lines and balance');
@@ -306,8 +319,15 @@ const OPS = {
     run(ctx, p) {
       const src = ctx.store.data.journal.find(j => j.id === Number(p.id));
       need(src, 'journal entry not found');
+      /* only a manual entry may be reversed here: an entry created by a document (invoice, payment,
+         return, stock, payroll...) must be corrected through that document, otherwise the books and
+         the document disagree. A reversal can be reversed only once, and a reversal itself is final. */
+      need(!src.ref_type, 'this entry belongs to a document; correct it through that document (credit note, return, etc.)');
+      need(!src.reverses, 'a reversal entry cannot be reversed again; post a new entry instead');
+      need(!ctx.store.data.journal.some(j => j.reverses === src.id || (!j.ref_type && String(j.memo || '').startsWith(`${ctx.t('Reversal of')} #${src.id} `))), 'this entry is already reversed');
       const e = ctx.reverseJournal(src.id);
       need(e, 'reversal failed');
+      e.reverses = src.id;
       return { entry: e, reverses: src.id };
     },
   },
@@ -346,7 +366,8 @@ const OPS = {
     view: 'finance',
     run(ctx, p) {
       need(['income', 'expense'].includes(p.type), 'bad type');
-      need(Number(p.amount) > 0, 'amount must be positive');
+      need(Number(p.amount) > 0 && Number(p.amount) <= MAXAMT, 'amount must be positive');
+      need(p.date == null || p.date === '' || validDate(p.date), 'date must be a real YYYY-MM-DD date');
       const S = ctx.store;
       const row = S.add('ledger', {
         date: p.date || ctx.todayStr(), type: p.type, category: String(p.category || 'Other'),
@@ -420,7 +441,8 @@ const OPS = {
       const S = ctx.store;
       const out = p.out || {};
       const hours = Math.round(ctx.num(out.hours) * 100) / 100;
-      need(hours > 0, 'hours must be positive');
+      need(hours > 0 && hours <= 24, 'hours must be between 0 and 24 per entry');
+      need(out.date == null || out.date === '' || validDate(out.date), 'date must be a real YYYY-MM-DD date');
       const pr = (S.data.projects || []).find(x => x.id === Number(out.project_id));
       need(pr, 'project not found');
       if (p.id || out.id) {
@@ -492,7 +514,8 @@ const OPS = {
       const S = ctx.store;
       const out = p.out || {};
       const amount = Math.round(ctx.num(out.amount) * 100) / 100;
-      need(amount > 0, 'amount must be positive');
+      need(amount > 0 && amount <= MAXAMT, 'amount must be positive');
+      need(out.date == null || out.date === '' || validDate(out.date), 'date must be a real YYYY-MM-DD date');
       if (p.id || out.id) {
         const e = (S.data.expenses || []).find(x => x.id === Number(p.id || out.id));
         need(e, 'expense not found');
@@ -567,16 +590,24 @@ const OPS = {
   },
   'payroll': {
     view: 'finance',
-    run(ctx, p) {
+    run(ctx, p, user) {
+      /* payroll posts every salary at once: owner-only, one run per month, no future months */
+      need(user && user.role === 'admin', 'only an admin can run payroll');
       const S = ctx.store;
       const m = String(p.month || ctx.monthStr());
-      const already = S.data.ledger.some(l => l.type === 'expense' && l.category === 'Payroll' && (l.date || '').startsWith(m));
+      need(/^\d{4}-(0[1-9]|1[0-2])$/.test(m), 'month must be YYYY-MM');
+      need(FUTURE_OK || m <= ctx.monthStr(), 'payroll cannot be run for a future month');
+      /* a prior run is recognised by its month marker, by the salary memo, or (older rows) by the posting date */
+      const already = S.data.ledger.some(l => l.type === 'expense' && l.category === 'Payroll' &&
+        (l.payroll_month === m || String(l.memo || '').startsWith(`Salary ${m} -`) || (!l.payroll_month && (l.date || '').startsWith(m))));
       need(!already, 'payroll for this month is already posted');
       const active = S.data.employees.filter(e => e.status === 'active');
       need(active.length, 'no active employees');
+      need(active.every(e => Number.isFinite(ctx.num(e.salary)) && ctx.num(e.salary) >= 0), 'an employee has an invalid salary');
       const total = active.reduce((s, e) => s + ctx.num(e.salary), 0);
+      need(total > 0, 'total salaries are zero; nothing to post');
       active.forEach(e => {
-        S.add('ledger', { date: ctx.todayStr(), type: 'expense', category: 'Payroll', amount: ctx.num(e.salary), ref_type: 'payroll', ref_id: e.id, memo: `Salary ${m} - ${e.name}` });
+        S.add('ledger', { date: ctx.todayStr(), type: 'expense', category: 'Payroll', amount: ctx.num(e.salary), ref_type: 'payroll', ref_id: e.id, payroll_month: m, memo: `Salary ${m} - ${e.name}` });
       });
       ctx.ensureCOA();
       ctx.postPayrollJournal(m, total);
@@ -698,6 +729,7 @@ const OPS = {
       need(Math.abs(nc - ctx.num(prod.cost)) > 1e-9, 'the new cost equals the current cost; nothing to revalue');
       const qty = ctx.num(prod.stock);
       need(qty > 0, 'there is no stock on hand; just change the cost on the product');
+      need(nc < ctx.num(prod.cost), 'only write-downs are supported (inventory is carried at the lower of cost and net realisable value; no upward revaluation). A cost increase on stock needs an accountant-reviewed correction.');
       const delta = r2(qty * (nc - ctx.num(prod.cost)));
       need(Number.isFinite(Number(p.expected_value)) && Math.abs(Number(p.expected_value) - delta) < 0.005,
         `the adjustment is now ${delta.toFixed(2)} (stock ${qty} x cost change), not the reviewed amount; review it again`);
@@ -705,7 +737,7 @@ const OPS = {
       ctx.ensureCOA();
       const inv = ctx.accountByCode('1200').id, cogs = ctx.accountByCode('5000').id;
       const lines = delta > 0 ? [{ account_id: inv, debit: delta }, { account_id: cogs, credit: delta }] : [{ account_id: cogs, debit: -delta }, { account_id: inv, credit: -delta }];
-      const je = ctx.postJournal({ date: ctx.todayStr(), memo: `Inventory revaluation: ${prod.name} (${p.reason})`, ref_type: 'revaluation', ref_id: prod.id, lines });
+      const je = ctx.postJournal({ date: ctx.todayStr(), memo: `Inventory write-down to lower of cost and NRV: ${prod.name} (${p.reason})`, ref_type: 'revaluation', ref_id: prod.id, lines });
       need(je, 'revaluation could not be posted');
       prod.cost_history = (prod.cost_history || []).concat([{ date: ctx.todayStr(), from: ctx.num(prod.cost), to: nc, qty, value: delta, by: user.username, reason: String(p.reason).trim(), journal_id: je.id }]);
       prod.cost = nc;
@@ -1068,7 +1100,9 @@ const OPS = {
     view: 'invoices',
     run(ctx, p) {
       const S = ctx.store;
-      const today = /^\d{4}-\d{2}-\d{2}$/.test(p.today || '') ? p.today : ctx.todayStr();
+      /* the run date is the server's date: a client may only name an EARLIER date (a dry catch-up
+         window), never a future one that would generate and post invoices early */
+      const today = validDate(p.today) && (FUTURE_OK || p.today <= ctx.todayStr()) ? p.today : ctx.todayStr();
       const made = [], blocked = [];
       /* explicit user-triggered run only — never fired by opening a view.
          Templates generate DRAFT invoices unless the template opts in to
@@ -1711,10 +1745,10 @@ const OPS = {
       const cost = Math.round(ctx.num(out.cost) * 100) / 100;
       const salvage = Math.round(ctx.num(out.salvage) * 100) / 100;
       const life = Math.round(ctx.num(out.life_months));
-      need(cost > 0, 'cost must be positive');
+      need(cost > 0 && cost <= MAXAMT, 'cost must be positive');
       need(salvage >= 0 && salvage < cost, 'salvage must be below cost');
       need(life >= 1 && life <= 600, 'useful life must be 1-600 months');
-      need(/^\d{4}-\d{2}-\d{2}$/.test(out.purchase_date || ''), 'purchase date required');
+      need(validDate(out.purchase_date), 'purchase date required (a real YYYY-MM-DD date)');
       if (p.id || out.id) {
         const a = (S.data.assets || []).find(x => x.id === Number(p.id || out.id));
         need(a, 'asset not found');
@@ -1757,8 +1791,9 @@ const OPS = {
          per elapsed unposted month. The per-asset cursor makes a re-run for
          the same month a no-op; a long gap surfaces as a catch-up count. */
       const S = ctx.store;
-      need(/^\d{4}-\d{2}$/.test(p.month || ''), 'month required (YYYY-MM)');
+      need(/^\d{4}-(0[1-9]|1[0-2])$/.test(p.month || ''), 'month required (YYYY-MM)');
       const month = p.month;
+      need(FUTURE_OK || month <= ctx.monthStr(), 'depreciation cannot be posted for a future month');
       let posted = 0;
       const details = [];
       let skipped_unrecognized = 0;
@@ -1806,9 +1841,11 @@ const OPS = {
       const a = (S.data.assets || []).find(x => x.id === Number(p.id));
       need(a, 'asset not found');
       need(a.status === 'active', 'asset already disposed');
-      need(/^\d{4}-\d{2}-\d{2}$/.test(p.date || ''), 'disposal date required');
+      need(validDate(p.date), 'disposal date required (a real YYYY-MM-DD date)');
+      need(p.date >= a.purchase_date, 'disposal date cannot be before the purchase date');
+      need(!a.depr_through || p.date.slice(0, 7) >= a.depr_through, 'disposal date is before depreciation already posted; dispose on or after that month');
       const proceeds = Math.round(ctx.num(p.proceeds) * 100) / 100;
-      need(proceeds >= 0, 'proceeds must not be negative');
+      need(proceeds >= 0 && proceeds <= MAXAMT, 'proceeds must not be negative');
       const recognized = !!(a.acquisition_posted || a.opening_recognized);
       if (!recognized) {
         /* never recognized on the balance sheet: disposal is register-only.
@@ -1855,7 +1892,7 @@ const OPS = {
       need(!a.acquisition_posted && !a.opening_recognized, 'asset is already recognized in the books');
       const oa = Math.round(ctx.num(p.opening_accum) * 100) / 100;
       need(oa >= 0 && oa <= a.cost - a.salvage + 0.005, 'opening accumulated depreciation out of range');
-      need(/^\d{4}-\d{2}-\d{2}$/.test(p.date || ''), 'recognition date required');
+      need(validDate(p.date), 'recognition date required (a real YYYY-MM-DD date)');
       const net = Math.round((a.cost - oa) * 100) / 100;
       const lines = [{ account_id: ctx.accountByCode('1500').id, debit: a.cost }];
       if (oa > 0) lines.push({ account_id: ctx.accountByCode('1590').id, credit: oa });

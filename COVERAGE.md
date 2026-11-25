@@ -6,7 +6,7 @@ Automated adversarial coverage (`matrix-test.py`, 35 checks): P1 a user with no 
 
 Dedicated suites: corr-test (returns/credit notes/refund confirmation), forge-test (forged prices/fields), purchase-test, quality-test, ca-test, preserve-test (no data reset), pkg-test, migration battery.
 
-| Op | Required module | Notes |
+| Op | Required module | Notes (write-authority rules are in the op code; module view alone is not approval authority for payroll, reversal of postings, revaluation, recognition) |
 |---|---|---|
 | invoice-save | invoices | fuzzed in matrix; 403 without module |
 | invoice-delete | invoices | fuzzed in matrix; 403 without module |
@@ -84,5 +84,6 @@ Dedicated suites: corr-test (returns/credit notes/refund confirmation), forge-te
 - Local single-user browser mode is client-authoritative: the browser can edit its own data. The guards above apply to server mode only.
 - Not supported and blocked or absent: partial receipts, void of a credit note or return, credit balances / store credit (unpaid over-credit and unconfirmed refunds are blocked, never turned into cash movement), multi-level BOM, multi-currency, multi-company, bank reconciliation, e-sign, hosted files, Egypt ETA e-invoicing.
 - Old returns recorded before the price/refund fixes are kept as-is and shown as "Needs review" (price differs from order line, returned more than sold, money paid back without confirmation). No corrective entries are invented.
-- Not yet individually reviewed by hand, only fuzz/permission-tested: timesheet-invoice, expense-*, payroll, asset-*, produce/bom-save, recurring-run, leave/attendance, ticket-*, qc/doc.
+- Hand-reviewed with happy-path, duplicate, boundary and forged-valid-value tests (matrix B-section): payroll, journal/reversal, ledger-entry, expenses (submit/approve separation of duties), timesheets and timesheet-invoice, recurring-run, assets (save/depreciate/dispose). Still only fuzz and permission tested, not hand-reviewed for business logic: manufacturing (bom-save/produce), ticket-*, qc-*, doc-*, stock-adjust/transfer beyond earlier suites, pos shifts.
+- Valuation policy: only an inventory WRITE-DOWN to a lower cost is supported (lower of cost and net realisable value, IAS 2 / US GAAP ASC 330 principle), admin-only, with reason and reviewed amount, posted Dr COGS 5000 / Cr Inventory 1200 (no separate write-down account yet). Cost increases on stock and reversals of write-downs are blocked pending an accountant-reviewed policy. Not tax advice; not an accounting-readiness claim.
 - No production, Windows, or financial-readiness claim. Synthetic-data local trial only.

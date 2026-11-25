@@ -140,15 +140,72 @@ rp=tx({'op':'product-save','out':{'name':'RV','price':30,'cost':10,'stock':0}})[
 tx({'op':'stock-adjust','product_id':rp,'qty':4,'memo':'open'})
 st,jj=tx({'op':'product-save','id':rp,'out':{'name':'RV','price':30,'cost':12}}); ok('R1 cost change with stock rejected, points to revalue',st==400 and 'evalue' in json.dumps(jj),jj)
 jb=len(call('GET','/api/data',tok=tok)[1]['data']['journal'])
-ok('R2 non-admin revalue refused',tx({'op':'product-revalue','id':rp,'new_cost':12,'reason':'abc','expected_value':8},itok)[0]==403)
-ok('R3 no reason refused',tx({'op':'product-revalue','id':rp,'new_cost':12,'reason':'','expected_value':8})[0]==400)
-ok('R4 wrong expected value refused',tx({'op':'product-revalue','id':rp,'new_cost':12,'reason':'abc','expected_value':9})[0]==400)
+ok('R2b cost increase on stock refused (no upward revaluation)',tx({'op':'product-revalue','id':rp,'new_cost':12,'reason':'abc','expected_value':8})[0]==400)
+ok('R2 non-admin revalue refused',tx({'op':'product-revalue','id':rp,'new_cost':8,'reason':'abc','expected_value':-8},itok)[0]==403)
+ok('R3 no reason refused',tx({'op':'product-revalue','id':rp,'new_cost':8,'reason':'','expected_value':-8})[0]==400)
+ok('R4 wrong expected value refused',tx({'op':'product-revalue','id':rp,'new_cost':8,'reason':'abc','expected_value':-9})[0]==400)
 ok('R5 negative cost refused',tx({'op':'product-revalue','id':rp,'new_cost':-1,'reason':'abc','expected_value':-44})[0]==400)
 d=call('GET','/api/data',tok=tok)[1]['data']; ok('R6 refusals changed nothing',len(d['journal'])==jb and [p for p in d['products'] if p['id']==rp][0]['cost']==10)
-res=par(6,lambda i:tx({'op':'product-revalue','id':rp,'new_cost':12,'reason':'supplier repricing','expected_value':8})[0]); ok('R7 concurrent revalue: exactly one applies',res.count(200)==1,res)
+res=par(6,lambda i:tx({'op':'product-revalue','id':rp,'new_cost':8,'reason':'supplier repricing','expected_value':-8})[0]); ok('R7 concurrent revalue: exactly one applies',res.count(200)==1,res)
 d=call('GET','/api/data',tok=tok)[1]['data']; pr=[p for p in d['products'] if p['id']==rp][0]
-ok('R8 cost 12, history kept, one journal',pr['cost']==12 and len(pr.get('cost_history',[]))==1 and len(d['journal'])==jb+1,pr)
+ok('R8 cost 12, history kept, one journal',pr['cost']==8 and len(pr.get('cost_history',[]))==1 and len(d['journal'])==jb+1,pr)
 ok('R9 invariants after revalue',not invariants(d),invariants(d))
 je=d['journal'][-1]; ok('R10 journal Dr1200 8',sorted((l['debit'],l['credit']) for l in je['lines'])==[(0,8),(8,0)],je)
+
+# ---- business-logic / authority checks (valid-but-malicious values) ----
+call('POST','/api/users',{'username':'fin','password':'fin-pass-1','role':'employee','modules':['finance','accounting','assets','projects','invoices']},tok=tok)
+call('POST','/api/users',{'username':'exp','password':'exp-pass-1','role':'employee','modules':['expenses']},tok=tok)
+ftok,_,fj=login('fin','fin-pass-1'); xtok,_,xj=login('exp','exp-pass-1')
+# change-password gate may apply; check mustChange handling
+fs,_fj=call('GET','/api/me',tok=ftok); print('fin me',fs)
+d=call('GET','/api/data',tok=tok)[1]['data']
+# payroll: admin only, valid month, no duplicates, no future
+call('PUT','/api/data',{'data':{'employees':[{'id':901,'name':'E1','status':'active','salary':1000},{'id':902,'name':'E2','status':'active','salary':500}]}},tok=tok)
+_b1=tx({'op':'payroll','month':'2026-10'},ftok); ok('B1 non-admin finance user cannot run payroll',_b1[0]==403 or (_b1[0]==400 and 'admin' in json.dumps(_b1[1])),_b1)
+ok('B2 bad month refused',tx({'op':'payroll','month':'junk'})[0]==400)
+ok('B3 future month refused',tx({'op':'payroll','month':'2030-01'})[0]==400)
+ok('B4 payroll for an older month posts once',tx({'op':'payroll','month':'2026-10'})[0]==200)
+ok('B5 same older month a second time refused (was a duplicate-posting flaw)',tx({'op':'payroll','month':'2026-10'})[0]==400)
+ok('B5b current month still allowed after older month',tx({'op':'payroll'})[0]==200)
+# journal reversal
+je=tx({'op':'journal','date':'2026-11-05','memo':'manual','lines':[{'account_id':1,'debit':5},{'account_id':2,'credit':5}]})[1].get('entry',{}).get('id')
+ok('B6 manual entry created',bool(je))
+ok('B7 reversal posts',tx({'op':'journal-reverse','id':je})[0]==200)
+ok('B8 second reversal of same entry refused (was double-reversal flaw)',tx({'op':'journal-reverse','id':je})[0]==400)
+d=call('GET','/api/data',tok=tok)[1]['data']
+doc=[j for j in d['journal'] if j.get('ref_type')=='invoice'][0]['id']
+ok('B9 reversing a document journal refused',tx({'op':'journal-reverse','id':doc})[0]==400)
+rev=[j for j in d['journal'] if j.get('reverses')==je][0]['id']
+ok('B10 reversing a reversal refused',tx({'op':'journal-reverse','id':rev})[0]==400)
+ok('B11 invalid calendar date refused on journal',tx({'op':'journal','date':'2026-02-31','lines':[{'account_id':1,'debit':5},{'account_id':2,'credit':5}]})[0]==400)
+ok('B12 invalid date on ledger-entry refused',tx({'op':'ledger-entry','type':'expense','amount':5,'date':'2026-13-01'})[0]==400)
+# recurring-run future date
+rid=tx({'op':'recurring-save','out':{'contact_id':555,'interval':'monthly','next_date':'2027-06-01','tax_rate':0,'auto_post':True,'items':[{'description':'svc','qty':1,'price':10}]}})[1].get('recurring',{}).get('id')
+ok('B13 recurring-run with a forged future date creates nothing',tx({'op':'recurring-run','id':rid,'today':'2030-01-01'})[1].get('created')==[],tx({'op':'recurring-run','id':rid})[1])
+# assets
+ok('B14 asset with impossible date refused',tx({'op':'asset-save','out':{'name':'A','cost':100,'salvage':0,'life_months':12,'purchase_date':'2026-02-30'}})[0]==400)
+aid=tx({'op':'asset-save','out':{'name':'A','cost':1200,'salvage':0,'life_months':12,'purchase_date':'2026-01-10','post_acquisition':True}})[1].get('asset',{}).get('id')
+ok('B15 future depreciation month refused',tx({'op':'asset-depreciate','month':'2031-01'})[0]==400)
+ok('B16 depreciation to Oct posts',tx({'op':'asset-depreciate','month':'2026-10'})[0]==200)
+ok('B17 depreciation re-run is a no-op',tx({'op':'asset-depreciate','month':'2026-10'})[0]==400)
+ok('B18 disposal before depreciation already posted refused',tx({'op':'asset-dispose','id':aid,'date':'2026-03-01','proceeds':0})[0]==400)
+ok('B19 disposal before purchase refused',tx({'op':'asset-dispose','id':aid,'date':'2025-01-01','proceeds':0})[0]==400)
+d=call('GET','/api/data',tok=tok)[1]['data']; ok('B20 invariants after finance writers',not invariants(d),invariants(d))
+# timesheet bill/unbill
+PRJ=tx({'op':'project-save','out':{'name':'P','contact_id':555,'hourly_rate':50}}); print('prj',PRJ); PID=PRJ[1].get('project',{}).get('id')
+ok('B21 timesheet >24h refused',tx({'op':'timesheet-save','out':{'project_id':PID,'hours':25,'billable':True}})[0]==400)
+tx({'op':'timesheet-save','out':{'project_id':PID,'hours':2,'billable':True}})
+bi=tx({'op':'timesheet-invoice','project_id':PID})
+ok('B22 billing creates a draft for 100',bi[0]==200 and sum(i['qty']*i['price'] for i in bi[1]['invoice']['items'])==100,bi)
+ok('B23 billing again with nothing unbilled refused',tx({'op':'timesheet-invoice','project_id':PID})[0]==400)
+ok('B24 deleting the draft releases the time',tx({'op':'invoice-delete','id':bi[1]['invoice']['id']})[0]==200 and tx({'op':'timesheet-invoice','project_id':PID})[0]==200)
+# expenses: separation of duties
+xe=tx({'op':'expense-save','out':{'date':'2026-11-05','category':'Travel','amount':40}},xtok)
+ok('B25 expenses-only user can submit',xe[0]==200,xe)
+ok('B26 submitter cannot approve (no finance module)',tx({'op':'expense-approve','id':xe[1].get('expense',{}).get('id')},xtok)[0]==403)
+ok('B27 finance user approves once',tx({'op':'expense-approve','id':xe[1].get('expense',{}).get('id')},ftok)[0]==200)
+ok('B28 second approval refused',tx({'op':'expense-approve','id':xe[1].get('expense',{}).get('id')},ftok)[0]==400)
+ok('B29 bad expense date refused',tx({'op':'expense-save','out':{'date':'bad','category':'x','amount':5}},xtok)[0]==400)
+d=call('GET','/api/data',tok=tok)[1]['data']; ok('B30 invariants at end',not invariants(d),invariants(d))
 print('matrix-test: PASS=%d FAIL=%d'%(PASS,FAIL))
 srv.terminate()
