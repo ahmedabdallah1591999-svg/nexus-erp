@@ -233,11 +233,14 @@ function renderPayments() {
     const ref = p.ref_type === 'invoice'
       ? ((store.data.invoices.find(i => i.id === p.ref_id) || {}).number || '—')
       : ((store.data.purchases.find(x => x.id === p.ref_id) || {}).number || '—');
+    /* a credit application is a non-cash settlement (Dr/Cr between credit and payable/receivable accounts):
+       no direction colour or sign, and never counted as money in or out */
+    const nonCash = p.method === 'store_credit';
     return `<tr>
       <td>${esc(p.date || '—')}</td>
-      <td><span class="badge ${p.direction === 'in' ? 'won' : 'lost'}">${t(p.direction === 'in' ? 'incoming' : 'outgoing')}</span></td>
+      <td><span class="badge ${nonCash ? 'open' : p.direction === 'in' ? 'won' : 'lost'}">${t(nonCash ? 'credit applied (non-cash)' : p.direction === 'in' ? 'incoming' : 'outgoing')}</span></td>
       <td>${esc(party)}</td><td>${esc(ref)}</td>
-      <td class="${p.direction === 'in' ? '' : 'overdue-text'}">${p.direction === 'in' ? '+' : '−'}${money(p.amount)}</td>
+      <td class="${nonCash || p.direction === 'in' ? '' : 'overdue-text'}">${nonCash ? '' : p.direction === 'in' ? '+' : '−'}${money(p.amount)}</td>
       <td>${t(p.method || 'cash')}</td><td>${esc(p.memo || '')}</td></tr>`;
   }).join('');
 

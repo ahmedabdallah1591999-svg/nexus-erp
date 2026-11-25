@@ -57,3 +57,6 @@ Not changed / still open: Windows scripts were reviewed but never run on Windows
 - purchase-receipt-void: void the latest receipt of a partly received purchase (admin, reason, stock-on-hand check, exact reversal).
 - Customer credit: explicit store_credit on over-credit credit notes (liability 2150, no cash), credit-apply to the same customer's open invoice. Direct payment with method store_credit is rejected.
 hotfix16: supplier credit balances (account 1150, supplier-credit-apply, void rules), customer_credits/supplier_credits made server-owned (closes bulk-PUT forgery of customer credit balances). Matrix 196/196.
+
+## hotfix16b
+- Credit-application rows labeled non-cash (UI, Excel). Apply modal default capped to min(credit remaining, open amount). Cash report: refunds no longer unclassified. New tests: V1-V7, cash-test, mig-test.

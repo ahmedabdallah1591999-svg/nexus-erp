@@ -401,7 +401,9 @@ function cashMovementReport(from, to) {
 
   const bucketDefs = [
     { key: 'collections', match: (j, d) => j.ref_type === 'payment' && d > 0 },
-    { key: 'payouts', match: (j, d) => (j.ref_type === 'payment' || j.ref_type === 'pos-refund') && d < 0 },
+    /* money out to suppliers and refunds to customers (POS refund, confirmed credit-note / order-return refund), net of
+       refunds received back from a supplier (purchase return with a confirmed refund). Credit applications never touch cash/bank. */
+    { key: 'payouts', match: (j, d) => ((j.ref_type === 'payment' || j.ref_type === 'pos-refund' || j.ref_type === 'credit_note' || j.ref_type === 'return') && d < 0) || (j.ref_type === 'purchase_return' && d > 0) },
     { key: 'expenses_paid', match: (j, d) => j.ref_type === 'expense' && d < 0 },
     { key: 'payroll_paid', match: (j, d) => j.ref_type === 'payroll' && d < 0 },
     { key: 'asset_investing', match: (j, d) => (j.ref_type === 'asset' || j.ref_type === 'asset-dispose') && d !== 0 },

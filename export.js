@@ -345,7 +345,7 @@ function exportSheets() {
         const ref = p.ref_type === 'invoice'
           ? (((d.invoices || []).find(i => i.id === p.ref_id) || {}).number || '')
           : (((d.purchases || []).find(x => x.id === p.ref_id) || {}).number || '');
-        return [p.date || '', t(p.direction === 'in' ? 'incoming' : 'outgoing'), party, ref, p.amount, t(p.method || 'cash'), p.memo || ''];
+        return [p.date || '', t(p.method === 'store_credit' ? 'credit applied (non-cash)' : p.direction === 'in' ? 'incoming' : 'outgoing'), party, ref, p.amount, t(p.method || 'cash'), p.memo || ''];
       })],
   });
 

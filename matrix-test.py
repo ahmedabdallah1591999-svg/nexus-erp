@@ -148,7 +148,7 @@ zp=tx({'op':'product-save','out':{'name':'ZS','price':3,'cost':1,'stock':0}})[1]
 ok('R5 cost change when stock is 0 allowed',tx({'op':'product-save','id':zp,'out':{'name':'ZS','price':3,'cost':2}})[0]==200)
 # test seam cannot be enabled by shipped files
 import glob
-shipped=[f for f in glob.glob('/tmp/nexus-erp/*')+glob.glob('/tmp/nexus-erp/**/*',recursive=True) if os.path.isfile(f) and not f.endswith(('matrix-test.py','CHANGES.md','COVERAGE.md')) and '.git/' not in f and 'node_modules' not in f]
+shipped=[f for f in glob.glob('/tmp/nexus-erp/*')+glob.glob('/tmp/nexus-erp/**/*',recursive=True) if os.path.isfile(f) and not f.endswith(('matrix-test.py','CHANGES.md','COVERAGE.md')) and '.git/' not in f and 'node_modules' not in f and '/tests/' not in f]
 hits=[f for f in shipped if 'NEXUS_TEST' in open(f,errors='ignore').read() and not f.endswith('tx.js')]
 ok('R6 no shipped script/start file mentions the test seam',not hits,hits)
 ok('R7 forged future payroll month refused with seam off (production default)',tx({'op':'payroll','month':'2031-01'})[0]==400)
@@ -476,5 +476,30 @@ fk=json.loads(json.dumps(dd['customer_credits'])); fk[0]['remaining']=99999
 call('PUT','/api/data',{'data':{'supplier_credits':fc,'customer_credits':fk}},tok=tok)
 dd=D(); ok('T16 forged PUT of supplier_credits/customer_credits ignored',before==json.dumps(dd['supplier_credits'],sort_keys=True)+json.dumps(dd['customer_credits'],sort_keys=True))
 ok('T17 final books balanced and stock consistent',not invariants(D()))
+# ---- credit void symmetry (customer and supplier behave the same) ----
+for side in ('customer','supplier'):
+    base2=(acct('2150'),acct('1150'))
+    if side=='customer':
+        vi=tx({'op':'invoice-save','out':{'status':'sent','contact_id':555,'issue_date':'2026-11-09','due_date':'2026-12-01','tax_rate':0,'items':[{'description':'v','qty':1,'price':80}]}})[1]['invoice']['id']
+        tx({'op':'payment','direction':'in','ref_type':'invoice','ref_id':vi,'amount':80,'method':'bank'})
+        mk=lambda:tx({'op':'credit-note-create','invoice_id':vi,'reason':'over paid','items':[{'line':0,'qty':1}],'store_credit':True})
+        key,coll,docid,void_op,apply_op=('credit_note','customer_credits','credit_note','credit-note-void','credit-apply')
+    else:
+        vp=mkpo(777,2,10); tx({'op':'payment','direction':'out','ref_type':'purchase','ref_id':vp,'amount':20,'method':'bank'})
+        mk=lambda:tx({'op':'purchase-return-create','purchase_id':vp,'reason':'over paid','items':[{'line':0,'qty':2}],'store_credit':True})
+        key,coll,docid,void_op,apply_op=('purchase_return','supplier_credits','purchase_return','purchase-return-void','supplier-credit-apply')
+    r=mk(); doc=r[1][docid]
+    cr=[x for x in D()[coll] if x[docid+'_id']==doc['id']][0]
+    ok('V1 %s: credit created open, full amount'%side,r[0]==200 and cr['status']=='open' and cr['remaining']==cr['amount'],r)
+    ok('V2 %s: void needs a reason (>=5) and admin'%side,tx({'op':void_op,'id':doc['id'],'reason':'x'})[0]==400 and tx({'op':void_op,'id':doc['id'],'reason':'long enough reason'},itok)[0] in (400,403))
+    r=tx({'op':void_op,'id':doc['id'],'reason':'entered by mistake'}); d=D()
+    cr=[x for x in d[coll] if x[docid+'_id']==doc['id']][0]
+    ok('V3 %s: void marks credit void, remaining 0, GL back to baseline, books reconcile'%side,r[0]==200 and cr['status']=='void' and cr['remaining']==0 and (acct('2150',d),acct('1150',d))==base2 and not invariants(d),(r[0],cr,(acct('2150',d),acct('1150',d)),base2))
+    ok('V4 %s: voided credit cannot be applied and the document cannot be voided twice'%side,tx({'op':apply_op,'credit_id':cr['id'],('invoice_id' if side=='customer' else 'purchase_id'):(vi if side=='customer' else vp),'amount':1})[0]==400 and tx({'op':void_op,'id':doc['id'],'reason':'again please'})[0]==400)
+    r=mk(); ok('V5 %s: the same correction can be made again after a void (amounts freed)'%side,r[0]==200 and r[1][docid]['store_credit']>0,r)
+    doc2=r[1][docid]; cr2=[x for x in D()[coll] if x[docid+'_id']==doc2['id']][0]
+    tgt=tx({'op':'invoice-save','out':{'status':'sent','contact_id':555,'issue_date':'2026-11-09','due_date':'2026-12-01','tax_rate':0,'items':[{'description':'t','qty':1,'price':30}]}})[1]['invoice']['id'] if side=='customer' else mkpo(777,1,10)
+    ok('V6 %s: partial apply then void refused, credit untouched'%side,tx({'op':apply_op,'credit_id':cr2['id'],('invoice_id' if side=='customer' else 'purchase_id'):tgt,'amount':10})[0]==200 and tx({'op':void_op,'id':doc2['id'],'reason':'too late now'})[0]==400 and [x for x in D()[coll] if x['id']==cr2['id']][0]['remaining']==cr2['amount']-10)
+    d=D(); ok('V7 %s: books and credit totals reconcile after all of it'%side,not invariants(d) and abs(acct('2150',d)+sum(x['remaining'] for x in d['customer_credits'] if x['status']=='open'))<0.01 and abs(acct('1150',d)-sum(x['remaining'] for x in d['supplier_credits'] if x['status']=='open'))<0.01,(acct('2150',d),acct('1150',d)))
 print('matrix-test: PASS=%d FAIL=%d'%(PASS,FAIL))
 srv.terminate()
