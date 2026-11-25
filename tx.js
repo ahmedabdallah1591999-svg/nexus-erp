@@ -1403,6 +1403,7 @@ const OPS = {
   'credit-apply': {
     view: 'invoices',
     run(ctx, p, user) {
+      need(user && user.role === 'admin', 'only an admin can apply a customer credit');
       const S = ctx.store, r2 = v => Math.round(v * 100) / 100;
       const cc = (S.data.customer_credits || []).find(x => x.id === Number(p.credit_id));
       need(cc && cc.status === 'open', 'customer credit not found or not open');

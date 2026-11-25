@@ -116,7 +116,7 @@ function renderCorrections(kind) {
       cd.innerHTML = `<div class="lines-head" style="margin-bottom:8px"><h3>${t('Customer credits')}</h3></div>
         <div class="table-wrap"><table class="data"><thead><tr><th>#</th><th>${t('Customer')}</th><th>${t('Total')}</th><th>${t('Remaining')}</th><th>${t('Status')}</th><th></th></tr></thead><tbody>${ccs.map(x => {
           const ct = store.contact(x.contact_id);
-          return `<tr><td><div class="cell-main">${esc(x.number)}</div><div class="cell-sub">${esc(x.date)}</div></td><td>${esc(ct ? contactName(ct) : '')}</td><td>${money(x.amount)}</td><td>${money(x.remaining)}</td><td>${esc(t(x.status === 'open' ? 'Open' : x.status === 'used' ? 'Used' : 'Voided'))}</td><td>${x.status === 'open' && inServerMode() ? `<button class="mini-btn primary" data-usecc="${x.id}">${t('Use credit')}</button>` : ''}</td></tr>`;
+          return `<tr><td><div class="cell-main">${esc(x.number)}</div><div class="cell-sub">${esc(x.date)}</div></td><td>${esc(ct ? contactName(ct) : '')}</td><td>${money(x.amount)}</td><td>${money(x.remaining)}</td><td>${esc(t(x.status === 'open' ? 'Open' : x.status === 'used' ? 'Used' : 'Voided'))}</td><td>${x.status === 'open' && inServerMode() && Auth.current && Auth.current.role === 'admin' ? `<button class="mini-btn primary" data-usecc="${x.id}">${t('Use credit')}</button>` : ''}</td></tr>`;
         }).join('')}</tbody></table></div>`;
       host.appendChild(cd);
       cd.querySelectorAll('[data-usecc]').forEach(b => b.addEventListener('click', () => {
