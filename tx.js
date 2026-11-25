@@ -524,21 +524,35 @@ const OPS = {
   'purchase-save': {
     view: 'purchases',
     run(ctx, p) {
-      const out = p.out || {};
-      need(['draft', 'ordered', 'received'].includes(out.status), 'bad status');
+      const raw = p.out || {};
+      need(['draft', 'ordered', 'received'].includes(raw.status), 'bad status');
       const S = ctx.store;
-      validItems(out.items, S);
+      validItems(raw.items, S);
+      need(raw.supplier_id == null || raw.supplier_id === '' || S.data.suppliers.some(x => x.id === Number(raw.supplier_id)), 'supplier not found');
+      /* only these client fields are ever read: number, posting flags and
+         received_date are server-owned and cannot be forged on an edit */
+      const items = raw.items.map(it => ({ product_id: it.product_id == null ? null : Number(it.product_id), description: it.description, qty: Number(it.qty), cost: Number(it.cost != null ? it.cost : it.price) }));
+      const fields = { status: raw.status, supplier_id: raw.supplier_id ? Number(raw.supplier_id) : null, order_date: raw.order_date, notes: String(raw.notes || ''), items };
       let rec = null;
       if (p.id != null) {
         rec = S.data.purchases.find(x => x.id === Number(p.id));
         need(rec, 'purchase not found');
-        Object.assign(rec, out);
+        if (rec.status === 'received' || rec.stock_applied || rec.journal_received) {
+          /* a received purchase is accounting history: only the note may change */
+          const same = fields.status === 'received' && fields.supplier_id === (rec.supplier_id || null)
+            && fields.items.length === rec.items.length
+            && fields.items.every((it, i) => it.product_id === (rec.items[i].product_id == null ? null : Number(rec.items[i].product_id))
+              && Math.abs(it.qty - Number(rec.items[i].qty)) < 1e-9 && Math.abs(it.cost - Number(rec.items[i].cost != null ? rec.items[i].cost : rec.items[i].price)) < 1e-9);
+          need(same, 'a received purchase cannot be changed or moved back: it is posted to stock and payables');
+          rec.notes = fields.notes;
+        } else {
+          Object.assign(rec, fields);
+        }
       } else {
-        out.number = `PO-${String(S.data.meta.purchaseSeq).padStart(4, '0')}`;
+        rec = S.add('purchases', Object.assign(fields, {
+          number: `PO-${String(S.data.meta.purchaseSeq).padStart(4, '0')}`, stock_applied: false, ledger_posted: false,
+        }));
         S.data.meta.purchaseSeq++;
-        out.stock_applied = false;
-        out.ledger_posted = false;
-        rec = S.add('purchases', out);
       }
       /* the same receive side effects the form applies */
       if (rec.status === 'received' && !rec.stock_applied) {
