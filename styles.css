@@ -353,3 +353,5 @@ table.data tbody tr:hover { background: #f8f9ff; }
 .pos-side .table-wrap { overflow-x: auto; }
 .pos-side table.data { width: 100%; table-layout: fixed; min-width: 0; }
 .pos-side table.data td, .pos-side table.data th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+#localModeBanner { position: sticky; top: 0; z-index: 9999; background: #92400e; color: #fff; font-weight: 600; font-size: 13px; padding: 8px 14px; text-align: center; }
