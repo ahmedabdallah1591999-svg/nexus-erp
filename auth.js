@@ -115,6 +115,8 @@ const Auth = {
 
     if (this.needsSetup) {
       $('#setupForm').classList.remove('hidden');
+      /* the setup code exists only when a server runs: hide it in browser-only mode */
+      if (!(window.Sync && Sync.mode === 'server')) { const sc = $('#setupCode'); if (sc && sc.closest('.field')) sc.closest('.field').style.display = 'none'; }
       form.classList.add('hidden');
       $('#setupForm').addEventListener('submit', async e => {
         e.preventDefault();
