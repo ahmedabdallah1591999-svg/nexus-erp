@@ -6,7 +6,7 @@
    records a payment for the remaining balance, so partial and full
    settlements share one code path and never double-post. */
 
-const PAYMENT_METHODS = ['cash', 'bank', 'transfer'];
+const PAYMENT_METHODS = ['cash', 'bank', 'transfer', 'card'];
 
 function invoicePaidAmount(inv) {
   if (inv.paid_amount != null) return num(inv.paid_amount);
@@ -25,7 +25,19 @@ function purchaseOpenAmount(po) {
 /* Record a payment. Returns the row or null on invalid input.
    direction 'in': money from a customer against an invoice.
    direction 'out': money to a supplier against a purchase. */
+function settlementAccountId(method) {
+  /* cash settles into the till (1000); bank, transfer and card settle into
+     the bank account (1010) — mixing them would break cash reconciliation.
+     Anything missing or unknown keeps the historical cash account: legacy
+     rows predate methods and must not silently move to a new account. */
+  return accountByCode(['bank', 'transfer', 'card'].includes(method) ? '1010' : '1000').id;
+}
+
 function recordPayment({ direction, contact_id, supplier_id, ref_type, ref_id, amount, method, date, memo }) {
+  /* an explicit method must be a known one — a typo must not quietly pick
+     a settlement account; a missing method is legacy data and stays cash */
+  if (method != null && method !== '' && !PAYMENT_METHODS.includes(method)) return null;
+  method = method || 'cash';
   amount = Math.round(num(amount) * 100) / 100;
   if (!(amount > 0)) return null;
   ensureCOA();
@@ -37,7 +49,7 @@ function recordPayment({ direction, contact_id, supplier_id, ref_type, ref_id, a
     if (amount > open + 0.005) return null;               // no overpayment
     journal = postJournal({
       date, memo: memo || `${t('Payment received for')} ${inv.number}`, ref_type: 'payment', ref_id: null,
-      lines: [{ account_id: accountByCode('1000').id, debit: amount }, { account_id: accountByCode('1100').id, credit: amount }],
+      lines: [{ account_id: settlementAccountId(method), debit: amount }, { account_id: accountByCode('1100').id, credit: amount }],
     });
     if (!journal) return null;
     inv.paid_amount = Math.round((invoicePaidAmount(inv) + amount) * 100) / 100;
@@ -62,7 +74,7 @@ function recordPayment({ direction, contact_id, supplier_id, ref_type, ref_id, a
     if (amount > open + 0.005) return null;
     journal = postJournal({
       date, memo: memo || `${t('Payment to supplier for')} ${po.number}`, ref_type: 'payment', ref_id: null,
-      lines: [{ account_id: accountByCode('2000').id, debit: amount }, { account_id: accountByCode('1000').id, credit: amount }],
+      lines: [{ account_id: accountByCode('2000').id, debit: amount }, { account_id: settlementAccountId(method), credit: amount }],
     });
     if (!journal) return null;
     po.paid_amount = Math.round((purchasePaidAmount(po) + amount) * 100) / 100;
@@ -73,7 +85,7 @@ function recordPayment({ direction, contact_id, supplier_id, ref_type, ref_id, a
   }
   const row = store.add('payments', {
     date: date || todayStr(), direction, contact_id: contact_id || null, supplier_id: supplier_id || null,
-    amount, method: method || 'cash', ref_type, ref_id: Number(ref_id), memo: memo || '', journal_id: journal.id,
+    amount, method, ref_type, ref_id: Number(ref_id), memo: memo || '', journal_id: journal.id,
   });
   store.save();
   return row;

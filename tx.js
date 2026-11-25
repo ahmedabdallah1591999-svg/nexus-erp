@@ -1298,11 +1298,13 @@ const OPS = {
       }
       const shift = p.shift_id ? (S.data.pos_shifts || []).find(x => x.id === Number(p.shift_id) && x.status === 'open') : null;
       need(!p.shift_id || shift, 'shift not open');
-      const method = ['cash', 'bank', 'transfer'].includes(p.method) ? p.method : 'cash';
+      const method = ['cash', 'bank', 'transfer', 'card'].includes(p.method) ? p.method : 'cash';
       const today = ctx.todayStr();
+      const taxRate = p.tax_rate != null ? ctx.num(p.tax_rate) : ctx.num(S.data.settings && S.data.settings.tax_rate);
+      need(taxRate >= 0 && taxRate <= 100, 'tax rate out of range');
       ctx.saveInvoice(null, {
         status: 'sent', contact_id: null, deal_id: null,
-        issue_date: today, due_date: today, tax_rate: 0,
+        issue_date: today, due_date: today, tax_rate: taxRate,
         notes: 'POS', items: p.items.map(it => ({ product_id: Number(it.product_id), qty: ctx.num(it.qty), price: it.price })),
       });
       const inv = S.data.invoices[S.data.invoices.length - 1];
@@ -1326,28 +1328,34 @@ const OPS = {
   'pos-refund': {
     view: 'pos',
     run(ctx, p, user) {
-      /* full refund of a till sale: restock, reverse revenue and COGS, pay
-         the money back out of the till. One time, whole invoice. */
+      /* full refund of a till sale: restock, reverse revenue AND VAT, and
+         pay the money back through the SAME settlement account the sale
+         used (cash -> till 1000, bank/transfer -> 1010). One time only. */
       const S = ctx.store;
       const inv = (S.data.invoices || []).find(i => i.id === Number(p.id));
       need(inv, 'invoice not found');
       need(inv.pos_ref, 'not a POS sale');
       need(inv.status === 'paid', 'only a paid POS sale can be refunded');
-      const method = ['cash', 'bank', 'transfer'].includes(p.method) ? p.method : (inv.pos_method || 'cash');
+      const method = ['cash', 'bank', 'transfer', 'card'].includes(p.method) ? p.method : (inv.pos_method || 'cash');
       const today = ctx.todayStr();
-      const total = ctx.invoiceTotal(inv);
+      const total = Math.round(ctx.invoiceTotal(inv) * 100) / 100;
+      const sub = Math.round((inv.items || []).reduce((t2, it) => t2 + ctx.num(it.qty) * ctx.num(it.price), 0) * 100) / 100;
+      const tax = Math.round((total - sub) * 100) / 100;
       let cogs = 0;
       for (const it of (inv.items || [])) {
         const prod = S.data.products.find(x => x.id === Number(it.product_id));
         if (!prod) continue;
         cogs += ctx.num(prod.cost) * ctx.num(it.qty);
-        ctx.adjustStock(prod.id, it.warehouse_id || prod.warehouse_id || null, ctx.num(it.qty), `POS refund ${inv.number}`);
+        /* bare stock move: adjustStock would post its own adjustment
+           journal on top of the COGS reversal below (double-post) */
+        ctx.recordStockMove({ product_id: prod.id, warehouse_id: it.warehouse_id || prod.warehouse_id || null, qty: ctx.num(it.qty), reason: 'pos-refund', ref_type: 'pos-refund', ref_id: inv.id, memo: `POS refund ${inv.number}` });
       }
       cogs = Math.round(cogs * 100) / 100;
       const lines = [
-        { account_id: ctx.accountByCode('4000').id, debit: total },
-        { account_id: ctx.accountByCode('1000').id, credit: total },
+        { account_id: ctx.accountByCode('4000').id, debit: sub },
       ];
+      if (tax > 0) lines.push({ account_id: ctx.accountByCode('2100').id, debit: tax });
+      lines.push({ account_id: ctx.accountByCode(['bank', 'transfer', 'card'].includes(method) ? '1010' : '1000').id, credit: total });
       if (cogs > 0) {
         lines.push({ account_id: ctx.accountByCode('1200').id, debit: cogs });
         lines.push({ account_id: ctx.accountByCode('5000').id, credit: cogs });
@@ -1358,10 +1366,10 @@ const OPS = {
         amount: total, method, ref_type: 'invoice', ref_id: inv.id, memo: `POS refund ${inv.number}`, journal_id: null,
       });
       inv.status = 'refunded';
-      if (inv.pos_shift_id) {
-        const sh = (S.data.pos_shifts || []).find(x => x.id === inv.pos_shift_id);
-        if (sh) sh['refund_' + method] = Math.round((ctx.num(sh['refund_' + method]) + total) * 100) / 100;
-      }
+      /* refund cash leaves the till that is open NOW (the refunding
+         cashier's), never a closed shift's frozen numbers */
+      const openShift = (S.data.pos_shifts || []).find(x => x.status === 'open' && x.cashier === user.username);
+      if (openShift) openShift['refund_' + method] = Math.round((ctx.num(openShift['refund_' + method]) + total) * 100) / 100;
       S.save();
       return { invoice: inv };
     },
@@ -1375,8 +1383,8 @@ const OPS = {
       const row = S.add('pos_shifts', {
         cashier: user.username, status: 'open', opened_at: new Date().toISOString(),
         opening_float: Math.round(ctx.num(p.opening_float) * 100) / 100,
-        sales_total: 0, sales_cash: 0, sales_bank: 0, sales_transfer: 0,
-        refund_cash: 0, refund_bank: 0, refund_transfer: 0,
+        sales_total: 0, sales_cash: 0, sales_bank: 0, sales_transfer: 0, sales_card: 0,
+        refund_cash: 0, refund_bank: 0, refund_transfer: 0, refund_card: 0,
         closed_at: null, counted_cash: null, variance: null,
       });
       S.save();
@@ -1446,4 +1454,13 @@ function runTx(db, user, op, payload, canView) {
   }
 }
 
-module.exports = { runTx, SERVER_OWNED, OPS };
+/* Fill missing standard chart-of-accounts rows on an existing store at
+   load time (schema addition only — no journal, no postings). */
+function ensureCOAOnData(data) {
+  const ctx = makeSandbox();
+  ctx.store.data = data;
+  ctx.ensureCOA();
+  return data;
+}
+
+module.exports = { runTx, SERVER_OWNED, OPS, ensureCOAOnData };

@@ -22,7 +22,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { runTx, SERVER_OWNED } = require('./tx');
+const { runTx, SERVER_OWNED, ensureCOAOnData } = require('./tx');
 
 /* One queue serializes every mutation (tx ops and whole-data PUTs), so a
    business transaction never interleaves with another write: concurrent
@@ -97,6 +97,10 @@ if (db && db.data) {
     for (const row of v) if (row && Number.isFinite(row.id) && row.id > maxId) maxId = row.id;
   }
   if (!(db.data.meta.nextId > maxId)) db.data.meta.nextId = maxId + 1;
+  /* chart-of-accounts schema addition: releases add standard accounts
+     (e.g. 1010 Bank); fill any that are missing so upgraded stores show
+     the full chart immediately. Never touches existing rows or journal. */
+  ensureCOAOnData(db.data);
 }
 if (!db || !db.data || !db.users) { db = emptyDb(); saveJson(DB_FILE, db); }
 

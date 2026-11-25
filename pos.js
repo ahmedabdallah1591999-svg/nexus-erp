@@ -69,7 +69,7 @@ function posCharge(shift) {
   const total = posTotal();
   openModal(t('Charge'), [
     { key: 'method', label: t('Payment method'), type: 'select',
-      options: [{ value: 'cash', label: t('cash') }, { value: 'bank', label: t('bank') }, { value: 'transfer', label: t('transfer') }],
+      options: [{ value: 'cash', label: t('cash') }, { value: 'bank', label: t('bank') }, { value: 'transfer', label: t('transfer') }, { value: 'card', label: t('card') }],
       value: 'cash' },
   ], out => {
     /* explicit confirm with the amount before anything posts */
@@ -109,7 +109,7 @@ function renderPos() {
       <div class="head-actions">
         ${shift
           ? `<span class="badge won">${t('Open shift')} · ${t('Expected cash')}: ${money(posExpectedCash(shift))}</span>
-             <span class="cell-sub">${t('cash')}: ${money(num(shift.sales_cash))} · ${t('bank')}: ${money(num(shift.sales_bank))} · ${t('transfer')}: ${money(num(shift.sales_transfer))} · ${t('Refunds')}: ${money(num(shift.refund_cash) + num(shift.refund_bank) + num(shift.refund_transfer))}</span>
+             <span class="cell-sub">${t('cash')}: ${money(num(shift.sales_cash))} · ${t('bank')}: ${money(num(shift.sales_bank))} · ${t('transfer')}: ${money(num(shift.sales_transfer))} · ${t('card')}: ${money(num(shift.sales_card))} · ${t('Refunds')}: ${money(num(shift.refund_cash) + num(shift.refund_bank) + num(shift.refund_transfer) + num(shift.refund_card))}</span>
              <button class="secondary-btn" id="posClose">${t('Close shift')}</button>`
           : `<button class="secondary-btn" id="posOpen">${t('Open shift')}</button>`}
       </div>

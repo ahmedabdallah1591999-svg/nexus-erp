@@ -10,6 +10,7 @@ const ACCOUNT_TYPES = ['asset', 'liability', 'equity', 'revenue', 'expense'];
 
 const DEFAULT_COA = [
   { code: '1000', name: 'Cash', type: 'asset' },
+  { code: '1010', name: 'Bank', type: 'asset' },
   { code: '1100', name: 'Accounts Receivable', type: 'asset' },
   { code: '1200', name: 'Inventory', type: 'asset' },
   { code: '2000', name: 'Accounts Payable', type: 'liability' },
