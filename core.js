@@ -33,7 +33,7 @@ function emptyData() {
   return {
     meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1, orderSeq: 1, returnSeq: 1 },
     companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [],
-    products: [], suppliers: [], invoices: [], purchases: [], sales_orders: [], returns: [],
+    products: [], suppliers: [], invoices: [], purchases: [], sales_orders: [], returns: [], recurring: [],
     ledger: [], employees: [], notes: [], messages: [],
     accounts: [], journal: [], payments: [], warehouses: [], stock_moves: [],
     settings: {},
@@ -230,6 +230,21 @@ function txCall(op, payload, okMsg) {
   }).catch(() => { toast(t('Could not reach the server. Your change was not saved.')); render(); });
 }
 function inServerMode() { return typeof Sync !== 'undefined' && Sync.authoritative && Sync.authoritative(); }
+
+/* Advance an ISO date (yyyy-mm-dd) by a recurring interval, UTC-safe and
+   clamped to the end of the target month (Jan 31 + 1 month = Feb 28/29). */
+function advanceDate(iso, interval) {
+  const [y, m, dd] = String(iso).split('-').map(Number);
+  const d = new Date(Date.UTC(y, m - 1, dd));
+  if (interval === 'weekly') d.setUTCDate(d.getUTCDate() + 7);
+  else {
+    const months = interval === 'monthly' ? 1 : interval === 'quarterly' ? 3 : 12;
+    const target = (d.getUTCMonth() + months) % 12;
+    d.setUTCMonth(d.getUTCMonth() + months);
+    if (d.getUTCMonth() !== target) d.setUTCDate(0);
+  }
+  return d.toISOString().slice(0, 10);
+}
 
 /* ---------------- Search ---------------- */
 

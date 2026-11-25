@@ -372,7 +372,124 @@ function saveInvoice(existing, out) {
   if (existing) toast(`${t('Invoice')} ${inv.number} ${t('updated')}`);
 }
 
+/* ---------------- Recurring invoices ---------------- */
+
+/* Generate due invoices from active templates. Idempotent: next_date
+   advances one period per generated invoice, so a re-run is a no-op. */
+function runRecurringInvoices(silent) {
+  if (inServerMode()) {
+    Sync.tx('recurring-run', {}).then(r => {
+      if (r.ok && r.data) {
+        const made = r.data.created || [], blocked = r.data.blocked || [];
+        if (made.length) { toast(`${t('Recurring invoices generated')}: ${made.join(', ')}`); render(); }
+        if (blocked.length && !silent) toast(`${t('Insufficient stock for recurring run')}: ${blocked.join(', ')}`);
+      }
+    }).catch(() => {});
+    return;
+  }
+  const today = todayStr();
+  const made = [], blocked = [];
+  for (const r of store.data.recurring) {
+    let guard = 0;
+    while (r.status === 'active' && r.next_date && r.next_date <= today && guard++ < 24) {
+      const lacking = (r.items || []).map(it => {
+        if (it.product_id == null) return null;
+        const prod = store.product(it.product_id);
+        return prod && num(prod.stock) < num(it.qty) ? prod : null;
+      }).find(x => x);
+      if (lacking) { blocked.push(`${lacking.name} (${r.next_date})`); break; }
+      const before = store.data.invoices.length;
+      saveInvoice(null, {
+        status: 'sent', contact_id: r.contact_id, deal_id: null,
+        issue_date: r.next_date, due_date: r.next_date,
+        tax_rate: r.tax_rate || 0, notes: r.notes || '',
+        items: r.items.map(it => ({ ...it })),
+        recurring_id: r.id,
+      });
+      const inv = store.data.invoices[store.data.invoices.length - 1];
+      r.last_invoice_id = inv.id;
+      made.push(inv.number);
+      r.next_date = advanceDate(r.next_date, r.interval);
+      if (r.end_date && r.next_date > r.end_date) r.status = 'completed';
+      if (store.data.invoices.length === before) break; // safety: nothing created, do not spin
+    }
+  }
+  if (made.length || blocked.length) store.save();
+  if (made.length) toast(`${t('Recurring invoices generated')}: ${made.join(', ')}`);
+  if (blocked.length && !silent) toast(`${t('Insufficient stock for recurring run')}: ${blocked.join(', ')}`);
+}
+
+function editRecurring(rec) {
+  const isNew = !rec;
+  const row = rec || {
+    contact_id: '', interval: 'monthly', next_date: todayStr(), end_date: '',
+    tax_rate: 14, notes: '', items: [],
+  };
+  const intOpt = (v) => `<option value="${v}"${row.interval === v ? ' selected' : ''}>${t(v)}</option>`;
+  const html = `
+    <div class="form-grid">
+      <div class="field"><label>${t('Customer (CRM contact)')} *</label>
+        <select name="contact_id" required>
+          <option value="">${t('— choose —')}</option>
+          ${store.data.contacts.map(c => `<option value="${c.id}"${row.contact_id === c.id ? ' selected' : ''}>${esc(contactName(c))}</option>`).join('')}
+        </select></div>
+      <div class="field"><label>${t('Interval')}</label>
+        <select name="interval">${intOpt('weekly')}${intOpt('monthly')}${intOpt('quarterly')}${intOpt('yearly')}</select></div>
+      <div class="field"><label>${t('Next run')}</label><input name="next_date" type="date" value="${esc(row.next_date)}" required></div>
+      <div class="field"><label>${t('End date (optional)')}</label><input name="end_date" type="date" value="${esc(row.end_date || '')}"></div>
+      <div class="field"><label>${t('Tax rate %')}</label><input name="tax_rate" type="number" min="0" step="any" value="${num(row.tax_rate)}"></div>
+      <div class="field"><label>${t('Notes')}</label><input name="notes" value="${esc(row.notes || '')}"></div>
+    </div>
+    <div class="lines-head"><h4>${t('Line items')}</h4><button type="button" class="secondary-btn add-line">+ ${t('Add line')}</button></div>
+    <table class="lines"><thead><tr><th style="width:32%">${t('Product')}</th><th>${t('Description')}</th><th style="width:80px">${t('Qty')}</th><th style="width:110px">${t('Unit price')}</th><th style="width:80px">${t('Total')}</th><th></th></tr></thead>
+      <tbody class="lines-body">${(row.items.length ? row.items : [{ qty: 1, price: 0 }]).map(it => lineRowHtml(it, 'price')).join('')}</tbody>
+    </table>
+    <div class="doc-totals">
+      <div>${t('Subtotal')}: <strong class="doc-sub">0.00</strong></div>
+      <div>${t('Tax')}: <strong class="doc-tax">0.00</strong></div>
+      <div class="doc-grand">${t('Total')}: <strong class="doc-total">0.00</strong></div>
+    </div>`;
+
+  openDocumentModal(isNew ? t('New recurring invoice') : `${t('Edit')} ${t('Recurring invoice')}`, html);
+  const form = $('#modalForm');
+  wireLineItems(form, 'price', sub => {
+    const tax = sub * num(form.querySelector('[name=tax_rate]').value) / 100;
+    form.querySelector('.doc-sub').textContent = sub.toFixed(2);
+    form.querySelector('.doc-tax').textContent = tax.toFixed(2);
+    form.querySelector('.doc-total').textContent = (sub + tax).toFixed(2);
+  });
+  form.querySelector('[name=tax_rate]').addEventListener('input', () => form.querySelector('.lines-body').dispatchEvent(new Event('input')));
+
+  modalSubmit = () => {
+    const contact_id = idsOrNull(form.querySelector('[name=contact_id]').value);
+    if (!contact_id) { alert(t('Choose a customer contact first.')); return; }
+    const items = collectLines(form);
+    if (!items.length) { alert(t('Add at least one line item.')); return; }
+    const out = {
+      contact_id,
+      interval: form.querySelector('[name=interval]').value,
+      next_date: form.querySelector('[name=next_date]').value,
+      end_date: form.querySelector('[name=end_date]').value || '',
+      tax_rate: num(form.querySelector('[name=tax_rate]').value),
+      notes: form.querySelector('[name=notes]').value.trim(),
+      items,
+    };
+    if (inServerMode()) {
+      txCall('recurring-save', { id: rec && rec.id, out }, t('Recurring template saved'));
+      closeModal();
+      return;
+    }
+    if (rec) { Object.assign(rec, out); }
+    else { store.add('recurring', { ...out, status: 'active', last_invoice_id: null }); }
+    store.save();
+    closeModal();
+    toast(t('Recurring template saved'));
+    render();
+  };
+}
+
 function renderInvoices() {
+  runRecurringInvoices(true);
   const rows = store.data.invoices.slice().sort((a, b) => b.created_at < a.created_at ? -1 : 1);
   const body = rows.map(inv => {
     const c = inv.contact_id ? store.contact(inv.contact_id) : null;
@@ -394,15 +511,58 @@ function renderInvoices() {
 
   const open = rows.filter(i => i.status !== 'paid');
   const receivable = open.reduce((s, i) => s + invoiceTotal(i), 0);
+
+  const recRows = store.data.recurring.slice().sort((a, b) => String(a.next_date).localeCompare(String(b.next_date))).map(r => {
+    const c = r.contact_id ? store.contact(r.contact_id) : null;
+    const sub = (r.items || []).reduce((s2, it) => s2 + num(it.qty) * num(it.price), 0);
+    const total = sub * (1 + num(r.tax_rate) / 100);
+    return `<tr>
+      <td><div class="cell-main">${c ? esc(contactName(c)) : '—'}</div><div class="cell-sub">${(r.items || []).length} ${t('items')}</div></td>
+      <td>${t(r.interval)}</td>
+      <td><div>${esc(r.next_date || '—')}</div><div class="cell-sub">${r.end_date ? `${t('until')} ${esc(r.end_date)}` : ''}</div></td>
+      <td>${money(total)}</td>
+      <td><span class="badge ${r.status === 'active' ? 'won' : r.status === 'completed' ? 'lead' : 'inactive'}">${t(r.status)}</span></td>
+      <td class="row-actions">
+        ${r.status !== 'completed' ? `<button class="icon-btn" data-ract="${r.status === 'active' ? 'pause' : 'resume'}" data-id="${r.id}" title="${r.status === 'active' ? t('Pause') : t('Resume')}">${r.status === 'active' ? '⏸' : '▶️'}</button>` : ''}
+        <button class="icon-btn" data-ract="edit" data-id="${r.id}" title="${t('Edit')}">✏️</button>
+        <button class="danger-btn" data-ract="del" data-id="${r.id}" title="${t('Delete')}">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+
   $('#view-invoices').innerHTML = `
     <div class="view-head">
       <div><h2>${t('Sales Invoices')}</h2><div class="sub">${money(receivable)} ${t('outstanding across')} ${open.length} ${t('unpaid invoices')}</div></div>
       <button class="primary-btn" id="addInvoice">+ ${t('New invoice')}</button>
     </div>
+    <div class="card"><div class="lines-head" style="margin-bottom:8px"><h3>${t('Recurring invoices')}</h3><button class="secondary-btn" id="addRecurring">+ ${t('New recurring invoice')}</button></div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>${t('Customer')}</th><th>${t('Interval')}</th><th>${t('Next run')}</th><th>${t('Total')}</th><th>${t('Status')}</th><th></th></tr></thead>
+        <tbody id="recBody">${recRows || `<tr><td colspan="6" class="empty-state">${t('No recurring templates yet.')}</td></tr>`}</tbody>
+      </table></div></div>
     <div class="table-wrap"><table class="data">
       <thead><tr><th>${t('Invoice')}</th><th>${t('Customer')}</th><th>${t('Dates')}</th><th>${t('Total')}</th><th>${t('Status')}</th><th></th></tr></thead>
       <tbody>${body || `<tr><td colspan="6" class="empty-state">${t('No invoices yet.')}</td></tr>`}</tbody>
     </table></div>`;
+
+  $('#addRecurring').onclick = () => editRecurring(null);
+  $('#recBody').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-ract]');
+    if (!btn) return;
+    const id = Number(btn.dataset.id);
+    const rec = store.data.recurring.find(x => x.id === id);
+    if (!rec) return;
+    const act = btn.dataset.ract;
+    if (act === 'edit') { editRecurring(rec); return; }
+    if (act === 'del') { confirmDelete(t('Recurring invoice'), () => {
+      if (inServerMode()) { txCall('recurring-delete', { id }, t('Recurring template deleted')); return; }
+      store.data.recurring = store.data.recurring.filter(x => x.id !== id);
+      store.save(); toast(t('Recurring template deleted')); render();
+    }); return; }
+    const next = act === 'pause' ? 'paused' : 'active';
+    if (inServerMode()) { txCall('recurring-status', { id, status: next }, t(next)); return; }
+    rec.status = next; store.save(); render();
+  });
 
   $('#addInvoice').onclick = () => editInvoice(null);
   $('#view-invoices').querySelector('tbody').addEventListener('click', e => {

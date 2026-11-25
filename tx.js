@@ -28,7 +28,7 @@ const MODULE_FILES = ['i18n.js', 'i18n-extra.js', 'core.js', 'seed.js', 'crm.js'
 
 /* Collections only the server may write (never accepted from a client PUT). */
 const SERVER_OWNED = new Set(['accounts', 'journal', 'payments', 'warehouses', 'stock_moves',
-  'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns']);
+  'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring']);
 
 /* ---------------- browser sandbox ---------------- */
 
@@ -85,6 +85,7 @@ function makeSandbox() {
     postInvoiceSentJournal, postPurchaseReceivedJournal, postPayrollJournal,
     productWarehouseStock, recordStockMove, postOpeningStockJournal,
     applyReturnEffects, returnedQty, invoiceOpenAmount, inventoryGap,
+    advanceDate,
   })`, sandbox);
   return api;
 }
@@ -556,6 +557,89 @@ const OPS = {
   /* Return: validates quantities against what was sold minus what was
      already returned, then posts stock-in, revenue+VAT reversal, COGS
      reversal and the money side — atomically. */
+  'recurring-save': {
+    view: 'invoices',
+    run(ctx, p) {
+      const out = p.out || {};
+      const S = ctx.store;
+      need(['weekly', 'monthly', 'quarterly', 'yearly'].includes(out.interval), 'bad interval');
+      need(out.contact_id && S.data.contacts.some(c => c.id === Number(out.contact_id)), 'customer required');
+      out.contact_id = Number(out.contact_id);
+      validItems(out.items, S);
+      need(/^\d{4}-\d{2}-\d{2}$/.test(out.next_date || ''), 'start date required');
+      need(!out.end_date || /^\d{4}-\d{2}-\d{2}$/.test(out.end_date), 'bad end date');
+      need(ctx.num(out.tax_rate) >= 0 && ctx.num(out.tax_rate) <= 100, 'bad tax rate');
+      let r;
+      if (p.id != null) {
+        r = S.data.recurring.find(x => x.id === Number(p.id));
+        need(r, 'recurring template not found');
+        const status = r.status;
+        Object.assign(r, out);
+        /* status moves only through recurring-status / completion */
+        if (!['active', 'paused', 'completed'].includes(r.status)) r.status = status;
+        S.save();
+      } else {
+        r = S.add('recurring', { ...out, status: out.status === 'paused' ? 'paused' : 'active', last_invoice_id: null });
+      }
+      return { template: r };
+    },
+  },
+  'recurring-status': {
+    view: 'invoices',
+    run(ctx, p) {
+      const r = ctx.store.data.recurring.find(x => x.id === Number(p.id));
+      need(r, 'recurring template not found');
+      need(['active', 'paused'].includes(p.status), 'bad status');
+      need(r.status !== 'completed', 'completed templates cannot change status');
+      r.status = p.status;
+      return { template: r };
+    },
+  },
+  'recurring-delete': {
+    view: 'invoices',
+    run(ctx, p) {
+      const S = ctx.store;
+      const r = S.data.recurring.find(x => x.id === Number(p.id));
+      need(r, 'recurring template not found');
+      S.data.recurring = S.data.recurring.filter(x => x.id !== r.id);
+      return { deleted: r.id };
+    },
+  },
+  'recurring-run': {
+    view: 'invoices',
+    run(ctx, p) {
+      const S = ctx.store;
+      const today = /^\d{4}-\d{2}-\d{2}$/.test(p.today || '') ? p.today : ctx.todayStr();
+      const made = [], blocked = [];
+      for (const r of S.data.recurring) {
+        let guard = 0;
+        /* one invoice per elapsed period; advancing next_date per period
+           makes a re-run idempotent, and a cap keeps a long-offline server
+           from flooding the books */
+        while (r.status === 'active' && r.next_date && r.next_date <= today && guard++ < 24) {
+          const lacking = (r.items || []).map(it => {
+            if (it.product_id == null) return null;
+            const prod = S.data.products.find(x => x.id === Number(it.product_id));
+            return prod && ctx.num(prod.stock) < ctx.num(it.qty) ? prod : null;
+          }).find(x => x);
+          if (lacking) { blocked.push(`${lacking.name} (${r.next_date})`); break; }
+          ctx.saveInvoice(null, {
+            status: 'sent', contact_id: r.contact_id, deal_id: null,
+            issue_date: r.next_date, due_date: r.next_date,
+            tax_rate: r.tax_rate || 0, notes: r.notes || '',
+            items: r.items.map(it => ({ ...it })),
+            recurring_id: r.id,
+          });
+          const inv = S.data.invoices[S.data.invoices.length - 1];
+          r.last_invoice_id = inv.id;
+          made.push(inv.number);
+          r.next_date = ctx.advanceDate(r.next_date, r.interval);
+          if (r.end_date && r.next_date > r.end_date) r.status = 'completed';
+        }
+      }
+      return { created: made, blocked };
+    },
+  },
   'return-create': {
     view: 'orders',
     run(ctx, p) {
