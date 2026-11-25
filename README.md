@@ -31,8 +31,8 @@ No backend, no build step — open it and work. Data is stored in the browser.
 
 ## Sign-in & access control — جديد
 
-- First run creates one admin account: username **admin**, password **admin123**.
-  You are **forced to choose a new password** on first sign-in.
+- First run asks you to **create the admin account** with your own username and
+  password. There are no default or shared credentials.
 - The admin can create employee accounts from **🔑 Users**, choose which sections
   each employee can open, and reset passwords.
 - Employees see only their allowed sections; the sidebar, search and direct links
@@ -48,10 +48,11 @@ server database.
 ## Excel export with charts — جديد
 
 **📊 Export to Excel** downloads one workbook containing every module as a sheet,
-a **Summary** sheet with the key numbers, and a **Charts** sheet with rendered
-charts (sales by month, expenses by category, pipeline, top products) embedded
-as images. The file is built entirely in the browser (via JSZip, vendored in
-`vendor/`) — no server, nothing uploaded anywhere.
+a **Summary** sheet with the key numbers, a **ChartData** sheet, and a **Charts**
+sheet with native, editable Excel charts (sales by month, expenses by category,
+pipeline, top products) bound to the ChartData ranges — edit values or restyle
+them like any chart you made in Excel yourself. The file is built entirely in
+the browser (via JSZip, vendored in `vendor/`) — no server, nothing uploaded.
 
 ## Google Drive export — one-time setup
 
@@ -89,8 +90,8 @@ The app is 100% static. Any of these work:
 - Accounts (usernames + salted password hashes) live in a separate localStorage key.
 - **Export data** downloads everything as JSON (backup / move to another device).
 - **Import** restores a previous export (admin only).
-- To reset to the demo data, clear the site data for the page (or the
-  `nexus-erp-v1` localStorage key).
+- The first run includes demo data so every screen has something to show;
+  delete the demo rows from inside the app as you replace them with real data.
 
 ## Project structure
 

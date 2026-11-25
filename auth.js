@@ -19,14 +19,9 @@ const Auth = {
   load() {
     try { this.users = JSON.parse(localStorage.getItem(AUTH_KEY)) || []; }
     catch (e) { this.users = []; }
-    if (!this.users.length) {
-      this.users = [];
-      const salt = Auth.makeSalt();
-      Auth.hash(salt, 'admin123').then(h => {
-        this.users.push({ id: 1, username: 'admin', salt, hash: h, role: 'admin', modules: GRANTABLE_VIEWS.slice(), mustChange: true, created_at: new Date().toISOString() });
-        this.persist();
-      });
-    }
+    // No default/shared credentials: the very first user creates the admin
+    // account with their own username and password (first-run setup form).
+    this.needsSetup = this.users.length === 0;
   },
 
   persist() { localStorage.setItem(AUTH_KEY, JSON.stringify(this.users)); },
@@ -101,25 +96,49 @@ const Auth = {
     const screen = $('#loginScreen');
     const form = $('#loginForm');
     const err = $('#loginError');
+
+    const afterLogin = () => {
+      screen.classList.add('hidden');
+      document.querySelector('.app').classList.remove('app-locked');
+      this.applyUI();
+      onReady();
+      if (this.current.mustChange) this.forcePasswordChange();
+    };
+
     form.addEventListener('submit', async e => {
       e.preventDefault();
       err.classList.add('hidden');
       const ok = await this.login($('#loginUser').value.trim(), $('#loginPass').value);
       if (!ok) { err.classList.remove('hidden'); return; }
-      screen.classList.add('hidden');
-      document.querySelector('.app').classList.remove('app-locked');
-      this.applyUI();
-      onReady();
-      if (this.current.mustChange) this.forcePasswordChange();
+      afterLogin();
     });
+
+    if (this.needsSetup) {
+      $('#setupForm').classList.remove('hidden');
+      form.classList.add('hidden');
+      $('#setupForm').addEventListener('submit', async e => {
+        e.preventDefault();
+        const username = $('#setupUser').value.trim();
+        const p1 = $('#setupPass1').value, p2 = $('#setupPass2').value;
+        if (!username) return;
+        if (p1.length < 4) { $('#setupError').textContent = t('Password is too short.'); $('#setupError').classList.remove('hidden'); return; }
+        if (p1 !== p2) { $('#setupError').textContent = t('Passwords do not match.'); $('#setupError').classList.remove('hidden'); return; }
+        const u = { id: 1, username, role: 'admin', modules: GRANTABLE_VIEWS.slice(), mustChange: false, created_at: new Date().toISOString() };
+        await this.setPassword(u, p1);
+        this.users.push(u);
+        this.persist();
+        this.needsSetup = false;
+        this.current = u;
+        sessionStorage.setItem(SESSION_KEY, u.username);
+        afterLogin();
+      });
+      return;
+    }
+
     const existing = this.sessionUser();
     if (existing) {
       this.current = existing;
-      screen.classList.add('hidden');
-      document.querySelector('.app').classList.remove('app-locked');
-      this.applyUI();
-      onReady();
-      if (this.current.mustChange) this.forcePasswordChange();
+      afterLogin();
     }
   },
 

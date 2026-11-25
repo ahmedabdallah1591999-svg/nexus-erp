@@ -21,6 +21,14 @@
       <div id="loginError" class="login-error hidden" data-i18n="Wrong username or password.">Wrong username or password.</div>
       <button type="submit" class="primary-btn login-btn" data-i18n="Sign in">Sign in</button>
     </form>
+    <form id="setupForm" class="hidden">
+      <div class="setup-note" data-i18n="First-time setup: create the admin account">First-time setup: create the admin account</div>
+      <div class="field"><label data-i18n="Username">Username</label><input id="setupUser" autocomplete="username" required></div>
+      <div class="field"><label data-i18n="New password">New password</label><input id="setupPass1" type="password" autocomplete="new-password" required></div>
+      <div class="field"><label data-i18n="Confirm password">Confirm password</label><input id="setupPass2" type="password" autocomplete="new-password" required></div>
+      <div id="setupError" class="login-error hidden"></div>
+      <button type="submit" class="primary-btn login-btn" data-i18n="Create admin account">Create admin account</button>
+    </form>
     <div class="lang-switch login-lang" role="group" aria-label="Language">
       <button data-lang="en" class="lang-btn">English</button>
       <button data-lang="ar" class="lang-btn active">العربية</button>
