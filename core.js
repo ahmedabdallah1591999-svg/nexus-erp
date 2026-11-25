@@ -34,7 +34,7 @@ function emptyData() {
     meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1, orderSeq: 1, returnSeq: 1 },
     companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [],
     products: [], suppliers: [], invoices: [], purchases: [], sales_orders: [], returns: [], recurring: [],
-    ledger: [], employees: [], notes: [], messages: [],
+    ledger: [], expenses: [], employees: [], notes: [], messages: [],
     accounts: [], journal: [], payments: [], warehouses: [], stock_moves: [],
     settings: {},
   };

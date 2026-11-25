@@ -32,6 +32,49 @@ function addLedgerEntry(type) {
   });
 }
 
+/* ---------------- Expense approvals ----------------
+   A submitted expense posts NOTHING: the ledger entry and its journal exist
+   only after an authorized approval. An employee cannot review their own
+   request; the admin can. */
+
+function editExpenseRequest(row) {
+  const isNew = !row;
+  openModal(isNew ? t('Request expense') : t('Edit expense request'), ledgerFields('expense').map(f => ({ ...f, value: row ? (row[f.key] ?? f.value) : f.value })), out => {
+    out.amount = num(out.amount);
+    if (!out.date) out.date = todayStr();
+    if (inServerMode()) { txCall('expense-save', { id: row && row.id, out }, t('Expense submitted for approval')); return; }
+    if (row) { Object.assign(row, out); }
+    else store.add('expenses', { ...out, status: 'submitted', submitted_by: (Auth.current && Auth.current.username) || 'local', reviewed_by: null, reviewed_at: null, ledger_id: null });
+    store.save(); render();
+    toast(t('Expense submitted for approval'));
+  });
+}
+
+function reviewExpense(id, act) {
+  let reason = '';
+  if (act === 'reject') { reason = window.prompt(t('Reject reason')) || ''; }
+  if (inServerMode()) { txCall(act === 'approve' ? 'expense-approve' : 'expense-reject', { id, reason }, act === 'approve' ? t('Approved — posted to the ledger') : t('Expense rejected')); return; }
+  const x = (store.data.expenses || []).find(e => e.id === id);
+  if (!x || x.status !== 'submitted') return;
+  const me = (Auth.current && Auth.current.username) || 'local';
+  if (me !== 'local' && x.submitted_by === me && (Auth.current || {}).role !== 'admin') { toast(t('You cannot review your own expense.')); return; }
+  x.status = act === 'approve' ? 'approved' : 'rejected';
+  x.reviewed_by = me; x.reviewed_at = todayStr();
+  if (act === 'approve') {
+    const entry = store.add('ledger', { date: x.date, type: 'expense', category: x.category, amount: x.amount, ref_type: 'expense', ref_id: x.id, memo: x.memo || x.category });
+    x.ledger_id = entry.id;
+    toast(t('Approved — posted to the ledger'));
+  } else { x.reject_reason = reason; toast(t('Expense rejected')); }
+  store.save(); render();
+}
+
+function deleteExpense(id) {
+  if (inServerMode()) { txCall('expense-delete', { id }, t('Expense deleted')); return; }
+  const x = (store.data.expenses || []).find(e => e.id === id);
+  if (!x || x.status !== 'submitted') return;
+  store.remove('expenses', id); toast(t('Expense deleted'));
+}
+
 function monthTotals(month) {
   const rows = store.data.ledger.filter(l => (l.date || '').startsWith(month));
   const income = rows.filter(l => l.type === 'income').reduce((s, l) => s + num(l.amount), 0);
@@ -55,12 +98,29 @@ function renderFinance() {
       </td>
     </tr>`).join('');
 
+  const exps = (store.data.expenses || []).slice().sort((a, b) => (a.date < b.date ? 1 : -1));
+  const me = (typeof Auth !== 'undefined' && Auth.current) || null;
+  const expRows = exps.map(x => `
+    <tr>
+      <td>${esc(x.date || '—')}</td>
+      <td>${t(x.category || 'Other')}</td>
+      <td class="overdue-text">−${money(x.amount)}</td>
+      <td>${esc(x.memo || '')}</td>
+      <td>${esc(x.submitted_by || '')}</td>
+      <td><span class="badge ${x.status === 'approved' ? 'won' : x.status === 'rejected' ? 'lost' : 'lead'}"${x.status === 'rejected' && x.reject_reason ? ` title="${esc(x.reject_reason)}"` : ''}>${t(x.status)}</span></td>
+      <td class="row-actions">
+        ${x.status === 'submitted' && me && (me.role === 'admin' || x.submitted_by !== me.username) ? `<button class="icon-btn" data-xact="approve" data-id="${x.id}" title="${t('Approve')}">✅</button><button class="icon-btn" data-xact="reject" data-id="${x.id}" title="${t('Reject')}">⛔</button>` : ''}
+        ${x.status === 'submitted' && me && (me.role === 'admin' || x.submitted_by === me.username) ? `<button class="icon-btn" data-xact="edit" data-id="${x.id}" title="${t('Edit')}">✏️</button><button class="danger-btn" data-xact="del" data-id="${x.id}" title="${t('Delete')}">🗑</button>` : ''}
+      </td>
+    </tr>`).join('');
+
   $('#view-finance').innerHTML = `
     <div class="view-head">
       <div><h2>${t('Finance')}</h2><div class="sub">${t('Income and expenses')} · ${m}</div></div>
       <div class="head-actions">
         <button class="secondary-btn" id="addIncome">+ ${t('Income')}</button>
         <button class="secondary-btn" id="addExpense">+ ${t('Expense')}</button>
+        <button class="secondary-btn" id="reqExpense">+ ${t('Request expense')}</button>
       </div>
     </div>
     <div class="cards">
@@ -68,6 +128,11 @@ function renderFinance() {
       <div class="stat-card"><div class="label">${t('Expenses this month')}</div><div class="value">${money(totals.expense)}</div></div>
       <div class="stat-card"><div class="label">${t('Net this month')}</div><div class="value" style="color:${totals.net >= 0 ? 'var(--green)' : 'var(--red)'}">${money(totals.net)}</div></div>
     </div>
+    <h3 style="margin:18px 0 8px">${t('Expense approvals')}</h3>
+    <div class="table-wrap"><table class="data">
+      <thead><tr><th>${t('Date')}</th><th>${t('Category')}</th><th>${t('Amount')}</th><th>${t('Memo')}</th><th>${t('by')}</th><th>${t('Status')}</th><th></th></tr></thead>
+      <tbody id="expBody">${expRows || `<tr><td colspan="7" class="empty-state">${t('No expense requests yet.')}</td></tr>`}</tbody>
+    </table></div>
     <div class="table-wrap"><table class="data">
       <thead><tr><th>${t('Date')}</th><th>${t('Type')}</th><th>${t('Category')}</th><th>${t('Amount')}</th><th>${t('Memo')}</th><th></th></tr></thead>
       <tbody>${body || `<tr><td colspan="6" class="empty-state">${t('No ledger entries yet.')}</td></tr>`}</tbody>
@@ -75,6 +140,17 @@ function renderFinance() {
 
   $('#addIncome').onclick = () => addLedgerEntry('income');
   $('#addExpense').onclick = () => addLedgerEntry('expense');
+  $('#reqExpense').onclick = () => editExpenseRequest(null);
+  const expBody = $('#view-finance').querySelector('#expBody');
+  if (expBody) expBody.addEventListener('click', e => {
+    const btn = e.target.closest('button[data-xact]');
+    if (!btn) return;
+    const id = Number(btn.dataset.id);
+    const act = btn.dataset.xact;
+    if (act === 'approve' || act === 'reject') reviewExpense(id, act);
+    else if (act === 'edit') editExpenseRequest((store.data.expenses || []).find(x => x.id === id));
+    else if (act === 'del') confirmDelete(t('this expense request'), () => deleteExpense(id));
+  });
   $('#view-finance').querySelector('tbody').addEventListener('click', e => {
     const btn = e.target.closest('button[data-act="del"]');
     if (!btn) return;

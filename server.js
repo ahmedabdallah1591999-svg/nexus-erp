@@ -45,7 +45,7 @@ const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const COLLECTION_VIEW = {
   contacts: 'contacts', companies: 'companies', deals: 'deals', tasks: 'tasks', quotes: 'quotes', sales_orders: 'orders', returns: 'orders',
   activities: 'contacts', products: 'products', suppliers: 'suppliers',
-  invoices: 'invoices', purchases: 'purchases', ledger: 'finance', recurring: 'invoices',
+  invoices: 'invoices', purchases: 'purchases', ledger: 'finance', expenses: 'finance', recurring: 'invoices',
   employees: 'employees', notes: 'notes', accounts: 'accounting', journal: 'accounting', payments: 'payments',
   warehouses: 'stock', stock_moves: 'stock',
 };
@@ -60,7 +60,7 @@ function emptyDb() {
       meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1, orderSeq: 1, returnSeq: 1 },
       companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [],
       products: [], suppliers: [], invoices: [], purchases: [], sales_orders: [], returns: [], recurring: [],
-      ledger: [], employees: [], notes: [], messages: [], accounts: [], journal: [], payments: [],
+      ledger: [], expenses: [], employees: [], notes: [], messages: [], accounts: [], journal: [], payments: [],
       warehouses: [], stock_moves: [], settings: {},
     },
   };

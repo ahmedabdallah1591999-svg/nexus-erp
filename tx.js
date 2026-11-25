@@ -294,6 +294,85 @@ const OPS = {
     },
   },
 
+  'expense-save': {
+    view: 'finance',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const out = p.out || {};
+      const amount = Math.round(ctx.num(out.amount) * 100) / 100;
+      need(amount > 0, 'amount must be positive');
+      if (p.id || out.id) {
+        const e = (S.data.expenses || []).find(x => x.id === Number(p.id || out.id));
+        need(e, 'expense not found');
+        need(e.status === 'submitted', 'only a submitted expense can be edited');
+        need(user.role === 'admin' || e.submitted_by === user.username, 'only the submitter can edit it');
+        Object.assign(e, { date: out.date || e.date, category: String(out.category || e.category), amount, memo: String(out.memo || e.memo || '') });
+        S.save();
+        return { expense: e };
+      }
+      const row = S.add('expenses', {
+        date: out.date || ctx.todayStr(), category: String(out.category || 'Other'), amount,
+        memo: String(out.memo || ''), status: 'submitted', submitted_by: user.username,
+        reviewed_by: null, reviewed_at: null, ledger_id: null,
+      });
+      S.save();
+      return { expense: row };
+    },
+  },
+  'expense-approve': {
+    view: 'finance',
+    run(ctx, p, user) {
+      /* approval is the posting event: the ledger entry and its journal exist
+         only after an authorized review. Separation of duties: an employee
+         cannot approve their own expense; the admin (owner) can. */
+      const S = ctx.store;
+      const e = (S.data.expenses || []).find(x => x.id === Number(p.id));
+      need(e, 'expense not found');
+      need(e.status === 'submitted', 'expense is not awaiting approval');
+      need(user.role === 'admin' || e.submitted_by !== user.username, 'you cannot approve your own expense');
+      const entry = S.add('ledger', {
+        date: e.date, type: 'expense', category: e.category, amount: e.amount,
+        ref_type: 'expense', ref_id: e.id, memo: e.memo || e.category,
+      });
+      ctx.postJournal({
+        date: entry.date, memo: entry.memo, ref_type: 'ledger', ref_id: entry.id,
+        lines: [
+          { account_id: ctx.accountByCode('6000').id, debit: entry.amount },
+          { account_id: ctx.accountByCode('1000').id, credit: entry.amount },
+        ],
+      });
+      e.status = 'approved'; e.reviewed_by = user.username; e.reviewed_at = ctx.todayStr(); e.ledger_id = entry.id;
+      S.save();
+      return { expense: e, entry };
+    },
+  },
+  'expense-reject': {
+    view: 'finance',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const e = (S.data.expenses || []).find(x => x.id === Number(p.id));
+      need(e, 'expense not found');
+      need(e.status === 'submitted', 'expense is not awaiting approval');
+      need(user.role === 'admin' || e.submitted_by !== user.username, 'you cannot reject your own expense');
+      e.status = 'rejected'; e.reviewed_by = user.username; e.reviewed_at = ctx.todayStr();
+      e.reject_reason = String(p.reason || '');
+      S.save();
+      return { expense: e };
+    },
+  },
+  'expense-delete': {
+    view: 'finance',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const e = (S.data.expenses || []).find(x => x.id === Number(p.id));
+      need(e, 'expense not found');
+      need(e.status === 'submitted', 'only a submitted expense can be deleted');
+      need(user.role === 'admin' || e.submitted_by === user.username, 'only the submitter can delete it');
+      S.data.expenses = S.data.expenses.filter(x => x.id !== e.id);
+      S.save();
+      return { deleted: e.id };
+    },
+  },
   'payroll': {
     view: 'finance',
     run(ctx, p) {
