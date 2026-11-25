@@ -14,6 +14,7 @@ function purchaseTotal(po) {
 }
 function invoiceDisplayStatus(inv) {
   if (inv.status === 'paid') return 'paid';
+  if (inv.status !== 'draft' && num(inv.credited_amount) > 0 && typeof invoiceOpenAmount === 'function' && invoiceOpenAmount(inv) <= 0.005 && invoicePaidAmount(inv) < invoiceTotal(inv) - 0.005) return 'credited';
   if (inv.status === 'sent' && inv.due_date && inv.due_date < todayStr()) return 'overdue';
   if (inv.status !== 'draft' && typeof invoicePaidAmount === 'function' && invoicePaidAmount(inv) > 0.005) return 'partial';
   return inv.status;
@@ -533,14 +534,15 @@ function renderInvoices() {
       <td><span class="badge ${st === 'paid' ? 'won' : st === 'overdue' ? 'high' : st === 'sent' ? 'lead' : 'inactive'}">${t(st)}</span></td>
       <td class="row-actions">
         ${st !== 'paid' ? `<button class="icon-btn" data-act="paid" data-id="${inv.id}" title="${t('Mark paid')}">💰</button>` : ''}
+        ${st !== 'draft' ? `<button class="icon-btn" data-act="credit" data-id="${inv.id}" title="${t('Credit note')}">↩️</button>` : ''}
         <button class="icon-btn" data-act="edit" data-id="${inv.id}" title="${t('Edit')}">✏️</button>
         <button class="danger-btn" data-act="del" data-id="${inv.id}" title="${t('Delete')}">🗑</button>
       </td>
     </tr>`;
   }).join('');
 
-  const open = rows.filter(i => i.status !== 'paid');
-  const receivable = open.reduce((s, i) => s + invoiceTotal(i), 0);
+  const open = rows.filter(i => i.status !== 'paid' && !(i.status !== 'draft' && num(i.credited_amount) > 0 && invoiceOpenAmount(i) <= 0.005));
+  const receivable = open.reduce((s, i) => s + (i.status === 'draft' ? invoiceTotal(i) : invoiceOpenAmount(i)), 0);
 
   const recRows = store.data.recurring.slice().sort((a, b) => String(a.next_date).localeCompare(String(b.next_date))).map(r => {
     const c = r.contact_id ? store.contact(r.contact_id) : null;
@@ -576,6 +578,7 @@ function renderInvoices() {
       <tbody>${body || `<tr><td colspan="6" class="empty-state">${t('No invoices yet.')}</td></tr>`}</tbody>
     </table></div>`;
 
+  if (typeof renderCorrections === 'function') renderCorrections('invoices');
   $('#addRecurring').onclick = () => editRecurring(null);
   $('#recBody').addEventListener('click', e => {
     const btn = e.target.closest('button[data-ract]');
@@ -603,6 +606,7 @@ function renderInvoices() {
     const id = Number(btn.dataset.id);
     const inv = store.invoice(id);
     if (btn.dataset.act === 'edit') editInvoice(inv);
+    if (btn.dataset.act === 'credit') { openCreditNote(inv); return; }
     if (btn.dataset.act === 'paid') { saveInvoice(inv, { status: 'paid' }); toast(`${inv.number} ${t('marked paid')}`); render(); }
     if (btn.dataset.act === 'del') confirmDelete(`${t('invoice')} ${inv.number}`, () => {
       if (inServerMode()) { txCall('invoice-delete', { id }, t('Invoice deleted')); return; }
@@ -708,6 +712,7 @@ function renderPurchases() {
       <td>${money(purchaseTotal(po))}</td>
       <td><span class="badge ${po.status === 'received' ? 'won' : 'open'}">${t(po.status)}</span></td>
       <td class="row-actions">
+        ${po.status === 'received' ? `<button class="icon-btn" data-act="preturn" data-id="${po.id}" title="${t('Return to supplier')}">↩️</button>` : ''}
         <button class="icon-btn" data-act="edit" data-id="${po.id}" title="${t('Edit')}">✏️</button>
         <button class="danger-btn" data-act="del" data-id="${po.id}" title="${t('Delete')}">🗑</button>
       </td>
@@ -724,12 +729,14 @@ function renderPurchases() {
       <tbody>${body || `<tr><td colspan="6" class="empty-state">${t('No purchase orders yet.')}</td></tr>`}</tbody>
     </table></div>`;
 
+  if (typeof renderCorrections === 'function') renderCorrections('purchases');
   $('#addPO').onclick = () => editPurchase(null);
   $('#view-purchases').querySelector('tbody').addEventListener('click', e => {
     const btn = e.target.closest('button[data-act]');
     if (!btn) return;
     const id = Number(btn.dataset.id);
     const po = store.data.purchases.find(x => x.id === id);
+    if (btn.dataset.act === 'preturn') { openPurchaseReturn(po); return; }
     if (btn.dataset.act === 'edit') editPurchase(po);
     if (btn.dataset.act === 'del') confirmDelete(`${t('purchase order')} ${po.number}`, () => {
       if (inServerMode()) { txCall('purchase-delete', { id }, t('Purchase order deleted')); return; }

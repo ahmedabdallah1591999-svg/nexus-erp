@@ -29,7 +29,7 @@ const MODULE_FILES = ['i18n.js', 'i18n-extra.js', 'core.js', 'seed.js', 'crm.js'
 /* Collections only the server may write (never accepted from a client PUT). */
 const SERVER_OWNED = new Set(['accounts', 'journal', 'payments', 'warehouses', 'stock_moves',
   'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring', 'expenses', 'projects', 'timesheets',
-  'tickets', 'ticket_replies', 'leave_requests', 'attendance', 'assets', 'pos_shifts', 'production', 'quality_checks', 'documents']);
+  'tickets', 'ticket_replies', 'leave_requests', 'attendance', 'assets', 'pos_shifts', 'production', 'quality_checks', 'documents', 'credit_notes', 'purchase_returns']);
 
 /* ---------------- browser sandbox ---------------- */
 
@@ -86,7 +86,7 @@ function makeSandbox() {
     postInvoiceSentJournal, postPurchaseReceivedJournal, postPayrollJournal,
     productWarehouseStock, recordStockMove, postOpeningStockJournal,
     applyReturnEffects, returnedQty, invoiceOpenAmount, inventoryGap,
-    advanceDate, accumDepr, accountCode,
+    advanceDate, accumDepr, accountCode, purchaseOpenAmount, settlementAccountId, PAYMENT_METHODS,
   })`, sandbox);
   return api;
 }
@@ -99,6 +99,7 @@ class TxError extends Error {
   constructor(msg) { super(msg); this.txError = true; }
 }
 
+const num0 = v => Number(v) || 0;
 function need(cond, msg) { if (!cond) throw new TxError(msg); }
 
 /* remove fields a client may never set on a record (identity, numbering,
@@ -163,6 +164,7 @@ const OPS = {
             && out.items.every((it, i) => (it.product_id == null ? null : Number(it.product_id)) === (existing.items[i].product_id == null ? null : Number(existing.items[i].product_id))
               && eq(it.qty, existing.items[i].qty) && eq(it.price, existing.items[i].price));
           need(same, 'a posted invoice cannot be changed: its lines, customer, tax and date are locked');
+          need(!(out.status === 'paid' && existing.status !== 'paid' && num0(existing.credited_amount) > 0 && ctx.invoiceOpenAmount(existing) <= 0.005), 'this invoice is fully settled by credit notes; nothing is left to pay');
           need(out.status === existing.status || (existing.status === 'sent' && out.status === 'paid'), 'a posted invoice cannot go back to an earlier status');
         }
       }
@@ -1037,6 +1039,151 @@ const OPS = {
       return { created: made, blocked };
     },
   },
+  /* ---------------- corrections: sales credit notes, purchase returns ----------------
+     A posted invoice or received purchase is never edited. A mistake is
+     corrected by a separate, explicit, numbered document that posts its own
+     reversing journal and (when asked) the matching stock move. Money that
+     must go back (customer refund / supplier refund) is only recorded when
+     the reviewer names the refund method; nothing is plugged. */
+  'credit-note-create': {
+    view: 'invoices',
+    run(ctx, p) {
+      const S = ctx.store;
+      const r2 = v => Math.round(v * 100) / 100;
+      S.data.credit_notes = S.data.credit_notes || [];
+      if (p.client_ref) {
+        const dup = S.data.credit_notes.find(x => x.client_ref === String(p.client_ref));
+        if (dup) return { credit_note: dup, duplicate: true };
+      }
+      const inv = S.data.invoices.find(i => i.id === Number(p.invoice_id));
+      need(inv, 'invoice not found');
+      need(inv.status !== 'draft' && inv.journal_sent, 'only a posted (sent or paid) invoice can be credited; edit or delete a draft instead');
+      need(String(p.reason || '').trim().length >= 3, 'a reason is required');
+      need(!(S.data.sales_orders || []).some(o => o.invoice_id === inv.id && ctx.returnedQty && (S.data.returns || []).some(rt => rt.order_id === o.id)),
+        'this invoice already has a sales-order return; use that return flow, not a credit note, to avoid crediting twice');
+      need(Array.isArray(p.items) && p.items.length > 0, 'choose at least one invoice line to credit');
+      const prior = {};
+      for (const cn of S.data.credit_notes.filter(x => x.invoice_id === inv.id && x.status !== 'void')) {
+        for (const it of cn.items) prior[it.line] = (prior[it.line] || 0) + it.qty;
+      }
+      const seen = new Set(), items = [];
+      for (const raw of p.items) {
+        const line = Number(raw.line);
+        need(Number.isInteger(line) && line >= 0 && line < inv.items.length, 'unknown invoice line');
+        need(!seen.has(line), 'duplicate invoice line');
+        seen.add(line);
+        const qty = Number(raw.qty);
+        need(Number.isFinite(qty) && qty > 0, 'credit quantity must be positive');
+        const src = inv.items[line];
+        need(qty <= Number(src.qty) - (prior[line] || 0) + 1e-9, `credit quantity exceeds what is left to credit on line ${line + 1}`);
+        items.push({ line, product_id: src.product_id == null ? null : src.product_id, description: src.description || '', qty, price: Number(src.price), restock: !!raw.restock && src.product_id != null && !!inv.stock_applied });
+      }
+      const sub = r2(items.reduce((s, it) => s + it.qty * it.price, 0));
+      const tax = r2(sub * ctx.num(inv.tax_rate) / 100);
+      const total = r2(sub + tax);
+      need(total > 0, 'credit total must be positive');
+      const open = ctx.invoiceOpenAmount(inv);
+      const toAR = Math.min(total, open);
+      const excess = r2(total - toAR);
+      let method = null;
+      if (excess > 0.005) {
+        need(ctx.PAYMENT_METHODS.includes(p.refund_method), `this credit is ${excess.toFixed(2)} more than the open balance (the customer already paid it): choose the refund method (${ctx.PAYMENT_METHODS.join(', ')}) to record the refund`);
+        method = p.refund_method;
+      }
+      ctx.ensureCOA();
+      const date = ctx.todayStr();
+      const number = `CN-${String(S.data.meta.cnSeq++).padStart(4, '0')}`;
+      const cn = S.add('credit_notes', { number, invoice_id: inv.id, invoice_number: inv.number, contact_id: inv.contact_id || null, date, reason: String(p.reason).trim(),
+        items, subtotal: sub, tax, total, applied_to_receivable: toAR, refunded: excess, refund_method: method, status: 'posted', client_ref: p.client_ref ? String(p.client_ref) : null });
+      const lines = [{ account_id: ctx.accountByCode('4000').id, debit: sub }];
+      if (tax > 0) lines.push({ account_id: ctx.accountByCode('2100').id, debit: tax });
+      if (toAR > 0.005) lines.push({ account_id: ctx.accountByCode('1100').id, credit: toAR });
+      if (excess > 0.005) lines.push({ account_id: ctx.settlementAccountId(method), credit: excess });
+      need(ctx.postJournal({ date, memo: `Credit note ${number} (${inv.number})`, ref_type: 'credit_note', ref_id: cn.id, lines }), 'credit note could not be posted');
+      const back = items.filter(it => it.restock);
+      if (back.length) {
+        ctx.applyStock(back.map(it => ({ product_id: it.product_id, qty: it.qty })), +1, { reason: 'credit-note', ref_type: 'credit_note', ref_id: cn.id });
+        const cogs = r2(back.reduce((s, it) => { const pr = S.data.products.find(x => x.id === it.product_id); return s + (pr ? it.qty * ctx.num(pr.cost) : 0); }, 0));
+        if (cogs > 0) need(ctx.postJournal({ date, memo: `COGS reversal for ${number}`, ref_type: 'credit_note-cogs', ref_id: cn.id,
+          lines: [{ account_id: ctx.accountByCode('1200').id, debit: cogs }, { account_id: ctx.accountByCode('5000').id, credit: cogs }] }), 'cost reversal could not be posted');
+      }
+      if (excess > 0.005) S.add('ledger', { date, type: 'expense', category: 'Sales return', amount: excess, ref_type: 'credit_note', ref_id: cn.id, memo: `Refund for ${number}` });
+      inv.credited_amount = r2(ctx.num(inv.credited_amount) + total);
+      S.save();
+      return { credit_note: cn };
+    },
+  },
+
+  'purchase-return-create': {
+    view: 'purchases',
+    run(ctx, p) {
+      const S = ctx.store;
+      const r2 = v => Math.round(v * 100) / 100;
+      S.data.purchase_returns = S.data.purchase_returns || [];
+      if (p.client_ref) {
+        const dup = S.data.purchase_returns.find(x => x.client_ref === String(p.client_ref));
+        if (dup) return { purchase_return: dup, duplicate: true };
+      }
+      const po = S.data.purchases.find(x => x.id === Number(p.purchase_id));
+      need(po, 'purchase not found');
+      need(po.status === 'received' && po.journal_received && po.stock_applied, 'only a received purchase can be returned to the supplier');
+      need(String(p.reason || '').trim().length >= 3, 'a reason is required');
+      need(Array.isArray(p.items) && p.items.length > 0, 'choose at least one purchase line to return');
+      const prior = {};
+      for (const pr of S.data.purchase_returns.filter(x => x.purchase_id === po.id && x.status !== 'void')) {
+        for (const it of pr.items) prior[it.line] = (prior[it.line] || 0) + it.qty;
+      }
+      const seen = new Set(), items = [], need2 = {};
+      for (const raw of p.items) {
+        const line = Number(raw.line);
+        need(Number.isInteger(line) && line >= 0 && line < po.items.length, 'unknown purchase line');
+        need(!seen.has(line), 'duplicate purchase line');
+        seen.add(line);
+        const qty = Number(raw.qty);
+        need(Number.isFinite(qty) && qty > 0, 'return quantity must be positive');
+        const src = po.items[line];
+        need(qty <= Number(src.qty) - (prior[line] || 0) + 1e-9, `return quantity exceeds what is left to return on line ${line + 1}`);
+        const cost = Number(src.cost != null ? src.cost : src.price);
+        if (src.product_id != null) {
+          const prod = S.data.products.find(x => x.id === Number(src.product_id));
+          need(prod, 'product no longer exists');
+          need(Math.abs(ctx.num(prod.cost) - cost) < 0.005, `${prod.name}: the product cost (${ctx.num(prod.cost)}) differs from this purchase line cost (${cost}); a return at a different cost needs a reviewed revaluation first`);
+          need2[prod.id] = (need2[prod.id] || 0) + qty;
+        }
+        items.push({ line, product_id: src.product_id == null ? null : Number(src.product_id), description: src.description || '', qty, cost });
+      }
+      for (const [pid, q] of Object.entries(need2)) {
+        const prod = S.data.products.find(x => x.id === Number(pid));
+        need(ctx.num(prod.stock) >= q, `not enough stock of ${prod.name} on hand to send back (${ctx.num(prod.stock)} available, ${q} to return)`);
+      }
+      const total = r2(items.reduce((s, it) => s + it.qty * it.cost, 0));
+      need(total > 0, 'return total must be positive');
+      const open = ctx.purchaseOpenAmount(po);
+      const toAP = Math.min(total, open);
+      const excess = r2(total - toAP);
+      let method = null;
+      if (excess > 0.005) {
+        need(ctx.PAYMENT_METHODS.includes(p.refund_method), `this return is ${excess.toFixed(2)} more than the open payable (the supplier was already paid): choose the method the supplier refunded by (${ctx.PAYMENT_METHODS.join(', ')}) to record the refund received`);
+        method = p.refund_method;
+      }
+      ctx.ensureCOA();
+      const date = ctx.todayStr();
+      const number = `PR-${String(S.data.meta.prSeq++).padStart(4, '0')}`;
+      const pr = S.add('purchase_returns', { number, purchase_id: po.id, purchase_number: po.number, supplier_id: po.supplier_id || null, date, reason: String(p.reason).trim(),
+        items, total, applied_to_payable: toAP, refunded: excess, refund_method: method, status: 'posted', client_ref: p.client_ref ? String(p.client_ref) : null });
+      const stockItems = items.filter(it => it.product_id != null).map(it => ({ product_id: it.product_id, qty: it.qty }));
+      if (stockItems.length) ctx.applyStock(stockItems, -1, { reason: 'purchase-return', ref_type: 'purchase_return', ref_id: pr.id });
+      const lines = [{ account_id: ctx.accountByCode('1200').id, credit: total }];
+      if (toAP > 0.005) lines.push({ account_id: ctx.accountByCode('2000').id, debit: toAP });
+      if (excess > 0.005) lines.push({ account_id: ctx.settlementAccountId(method), debit: excess });
+      need(ctx.postJournal({ date, memo: `Purchase return ${number} (${po.number})`, ref_type: 'purchase_return', ref_id: pr.id, lines }), 'purchase return could not be posted');
+      S.add('ledger', { date, type: 'income', category: 'Purchase return', amount: total, ref_type: 'purchase_return', ref_id: pr.id, memo: `${number} returned to supplier` });
+      po.returned_amount = r2(ctx.num(po.returned_amount) + total);
+      S.save();
+      return { purchase_return: pr };
+    },
+  },
+
   'return-create': {
     view: 'orders',
     run(ctx, p) {
@@ -1044,6 +1191,7 @@ const OPS = {
       const o = S.data.sales_orders.find(x => x.id === Number(p.id));
       need(o, 'order not found');
       need(o.status === 'fulfilled', 'only fulfilled orders can be returned');
+      need(!o.invoice_id || !(S.data.credit_notes || []).some(c => c.invoice_id === o.invoice_id && c.status !== 'void'), 'this order invoice already has a credit note; use the credit note flow, not a return, to avoid crediting twice');
       need(Array.isArray(p.items) && p.items.length > 0, 'items required');
       for (const it of p.items) {
         need(ctx.num(it.qty) > 0, 'qty must be positive');

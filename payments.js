@@ -13,13 +13,13 @@ function invoicePaidAmount(inv) {
   return inv.status === 'paid' ? invoiceTotal(inv) : 0;   // pre-payments rows
 }
 function invoiceOpenAmount(inv) {
-  return Math.max(0, Math.round((invoiceTotal(inv) - invoicePaidAmount(inv)) * 100) / 100);
+  return Math.max(0, Math.round((invoiceTotal(inv) - num(inv.credited_amount) - invoicePaidAmount(inv)) * 100) / 100);
 }
 function purchasePaidAmount(po) {
   return num(po.paid_amount || 0);
 }
 function purchaseOpenAmount(po) {
-  return Math.max(0, Math.round((purchaseTotal(po) - purchasePaidAmount(po)) * 100) / 100);
+  return Math.max(0, Math.round((purchaseTotal(po) - num(po.returned_amount) - purchasePaidAmount(po)) * 100) / 100);
 }
 
 /* Record a payment. Returns the row or null on invalid input.
