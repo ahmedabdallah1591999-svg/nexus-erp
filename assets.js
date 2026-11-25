@@ -54,14 +54,24 @@ function recognizeAsset(a) {
     { key: 'date', label: t('Recognition date'), type: 'date', required: true, value: todayStr() },
     { key: 'opening_accum', label: t('Opening accumulated depreciation'), type: 'number', value: 0 },
   ], out => {
-    if (inServerMode()) { txCall('asset-recognize', { id: a.id, date: out.date, opening_accum: num(out.opening_accum) }, t('Asset recognized in the books')); return; }
+    const oa = Math.round(num(out.opening_accum) * 100) / 100;
+    const net = Math.round((a.cost - oa) * 100) / 100;
+    /* dated Dr/Cr preview; recognition happens only after explicit approval */
+    const preview = [
+      `${t('Recognition date')}: ${out.date}`,
+      `Dr 1500 ${t('Fixed Assets')} ${money(a.cost)}`,
+      oa > 0 ? `Cr 1590 ${t('Accumulated depreciation')} ${money(oa)}` : null,
+      net > 0 ? `Cr 3000 ${t("Owner's Equity")} ${money(net)}` : null,
+    ].filter(Boolean).join('\n');
+    if (!window.confirm(preview)) return;
+    if (inServerMode()) { txCall('asset-recognize', { id: a.id, date: out.date, opening_accum: oa }, t('Asset recognized in the books')); return; }
     alert(t('This change needs the server.'));
   });
 }
 
 function disposeAsset(a) {
   if (!a.acquisition_posted && !a.opening_recognized
-    && !window.confirm(t('This asset is not recognized in the books; disposal will record no journal entry. Continue?'))) return;
+    && !window.confirm(t('This asset is not recognized in the books; disposal records no journal entry and any proceeds stay out of the cash books until a reviewed recognition or journal entry. Continue?'))) return;
   openModal(t('Dispose asset'), [
     { key: 'date', label: t('Disposal date'), type: 'date', required: true, value: todayStr() },
     { key: 'proceeds', label: t('Sale proceeds (USD)'), type: 'number', value: 0 },
@@ -109,7 +119,7 @@ function renderAssets() {
       <td><span class="badge ${a.status === 'active' ? 'won' : 'lost'}">${t(a.status)}</span>${a.depr_through ? `<div class="cell-sub">${t('depreciated through')} ${esc(a.depr_through)}</div>` : ''}</td>
       <td class="row-actions">
         ${a.status === 'active' && !recognized && isAdmin ? `<button class="secondary-btn" data-aact2="recognize" data-id="${a.id}">${t('Recognize in books')}</button>` : ''}
-        ${a.status === 'active' ? `<button class="secondary-btn" data-aact2="dispose" data-id="${a.id}">${t('Dispose')}</button>` : `<div class="cell-sub">${esc(a.disposed_date || '')} · ${money(a.proceeds || 0)}</div>`}
+        ${a.status === 'active' ? `<button class="secondary-btn" data-aact2="dispose" data-id="${a.id}">${t('Dispose')}</button>` : `<div class="cell-sub">${esc(a.disposed_date || '')} · ${money(a.proceeds || 0)}${!recognized && num(a.proceeds) > 0 ? ` · ${t('not posted, needs reviewed entry')}` : ''}</div>`}
         ${a.status === 'active' && !a.depr_through && !a.acquisition_posted && !a.opening_recognized ? `<button class="icon-btn" data-aact2="edit" data-id="${a.id}" title="${t('Edit')}">✏️</button><button class="danger-btn" data-aact2="del" data-id="${a.id}" title="${t('Delete')}">🗑</button>` : ''}
       </td>
     </tr>`;

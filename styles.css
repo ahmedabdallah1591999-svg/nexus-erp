@@ -336,3 +336,13 @@ table.data tbody tr:hover { background: #f8f9ff; }
 .note-item { padding: 8px 10px; border: 1px solid var(--line, #d7dce3); border-radius: 8px; margin-bottom: 6px; background: var(--card, #fff); }
 .note-internal { background: #fff8e1; border-color: #ead27a; }
 .reply-box textarea { font: inherit; padding: 8px; border: 1px solid var(--line, #d7dce3); border-radius: 8px; }
+
+/* point of sale */
+.pos-layout { display: grid; grid-template-columns: 1fr 380px; gap: 14px; align-items: start; }
+.pos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.pos-tile { display: flex; flex-direction: column; gap: 4px; padding: 12px; border-radius: 10px; border: 1px solid #dfe5f0; background: #ffffff; color: #1a2233; cursor: pointer; text-align: start; box-shadow: 0 1px 2px rgba(15,23,42,.06); }
+.pos-tile:disabled { opacity: .4; cursor: not-allowed; }
+.pos-tile:hover:not(:disabled) { border-color: #4f7cff; }
+.pos-side { display: flex; flex-direction: column; gap: 10px; }
+.pos-total { display: flex; justify-content: space-between; align-items: center; padding: 10px 4px; }
+@media (max-width: 900px) { .pos-layout { grid-template-columns: 1fr; } }
