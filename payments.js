@@ -168,6 +168,7 @@ function addPayment(direction) {
   const fields = paymentFields(direction);
   if (!fields[0].options.length) { toast(direction === 'in' ? t('No open invoices.') : t('No open purchases.')); return; }
   openModal(direction === 'in' ? t('Record incoming payment') : t('Record outgoing payment'), fields, out => {
+    if (inServerMode()) { txCall('payment', { direction, ref_type: direction === 'in' ? 'invoice' : 'purchase', ref_id: out.ref_id, amount: num(out.amount), method: out.method, date: out.date, memo: out.memo }, t('Payment recorded')); return; }
     const row = recordPayment({
       direction, ref_type: direction === 'in' ? 'invoice' : 'purchase', ref_id: out.ref_id,
       amount: out.amount, method: out.method, date: out.date, memo: out.memo,

@@ -218,6 +218,19 @@ function confirmDelete(label, fn) {
   if (window.confirm(t('Delete {item}? This cannot be undone.').replace('{item}', label))) { fn(); render(); }
 }
 
+/* Server-authoritative transaction wrapper (server mode only): the server
+   validates the operation, writes the derived accounting/stock records
+   itself and commits atomically. The client never edits those collections
+   directly when a server is in charge. */
+function txCall(op, payload, okMsg) {
+  Sync.tx(op, payload).then(r => {
+    if (r.ok) { if (okMsg) toast(okMsg); }
+    else toast(t('The server rejected the change.') + (r.data && r.data.error ? ` (${r.data.error})` : ''));
+    render();
+  }).catch(() => { toast(t('Could not reach the server. Your change was not saved.')); render(); });
+}
+function inServerMode() { return typeof Sync !== 'undefined' && Sync.authoritative && Sync.authoritative(); }
+
 /* ---------------- Search ---------------- */
 
 function runSearch(q) {

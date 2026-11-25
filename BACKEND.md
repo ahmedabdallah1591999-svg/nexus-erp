@@ -97,3 +97,23 @@ first login; the server stores only salted scrypt hashes.
 
 Node.js: free. Hosting: the office machine you already have. Total: **$0**,
 no payment method anywhere.
+
+## Authoritative transactions (POST /api/tx)
+
+All business state changes — invoices, quotes and conversions, purchases,
+payments, journal entries and reversals, stock adjustments/transfers,
+warehouses, ledger entries, payroll, product save/delete — go through
+`POST /api/tx` in server mode. The server loads the same client modules in a
+sandbox, validates the actor's permission for the initiating operation,
+checks amounts, statuses, stock availability, balanced entries, duplicate
+conversion/payment prevention and reversal references, then runs the
+independent accounting + stock invariant gates before committing atomically.
+
+The derived collections (accounts, journal, payments, warehouses,
+stock_moves, ledger, invoices, purchases, quotes, products) are
+server-owned: `PUT /api/data` ignores any client-sent copy of them, so a
+user without accounting/stock/payments read access can still complete an
+authorized sale — the server writes the journal and stock rows — and a
+forged write to those collections is silently dropped. All mutations are
+serialized through a single write queue, which also makes concurrent
+double-conversion and double-payment races impossible.

@@ -35,6 +35,7 @@ function editProduct(row) {
   openModal(row ? t('Edit product') : t('New product'), productFields(row), out => {
     out.price = num(out.price); out.cost = num(out.cost);
     out.stock = num(out.stock); out.reorder_level = num(out.reorder_level);
+    if (inServerMode()) { txCall('product-save', { id: row && row.id, out }, row ? t('Product updated') : t('Product added')); closeModal(); render(); return; }
     if (row) { store.update('products', row.id, out); toast(t('Product updated')); }
     else { store.add('products', out); toast(t('Product added')); }
     render();
@@ -76,7 +77,10 @@ function renderProducts() {
     const id = Number(btn.dataset.id);
     const row = store.product(id);
     if (btn.dataset.act === 'edit') editProduct(row);
-    if (btn.dataset.act === 'del') confirmDelete(`${t('product')} "${row.name}"`, () => { store.remove('products', id); toast(t('Product deleted')); });
+    if (btn.dataset.act === 'del') confirmDelete(`${t('product')} "${row.name}"`, () => {
+      if (inServerMode()) { txCall('product-delete', { id }, t('Product deleted')); return; }
+      store.remove('products', id); toast(t('Product deleted'));
+    });
   });
 }
 
@@ -297,6 +301,13 @@ function applyStock(items, direction, ctx) {
 }
 
 function saveInvoice(existing, out) {
+  /* Server mode: the server computes and commits the whole transaction
+     (stock, journals, ledger, number) authoritatively. */
+  if (inServerMode()) {
+    txCall('invoice-save', { id: existing && existing.id, out },
+      existing ? `${t('Invoice')} ${existing.number} ${t('updated')}` : `${t('Invoice')} ${t('created')}`);
+    return;
+  }
   let inv;
   if (existing) {
     inv = store.update('invoices', existing.id, out);
@@ -386,6 +397,7 @@ function renderInvoices() {
     if (btn.dataset.act === 'edit') editInvoice(inv);
     if (btn.dataset.act === 'paid') { saveInvoice(inv, { status: 'paid' }); toast(`${inv.number} ${t('marked paid')}`); render(); }
     if (btn.dataset.act === 'del') confirmDelete(`${t('invoice')} ${inv.number}`, () => {
+      if (inServerMode()) { txCall('invoice-delete', { id }, t('Invoice deleted')); return; }
       if (inv.stock_applied) applyStock(inv.items, +1, { reason: 'invoice-delete', ref_type: 'invoice', ref_id: inv.id });
       store.remove('invoices', id);
       store.save();
@@ -440,6 +452,7 @@ function editPurchase(po) {
       notes: form.querySelector('[name=notes]').value.trim(),
       items,
     };
+    if (inServerMode()) { txCall('purchase-save', { id: po && po.id, out }, po ? `${t('Purchase order')} ${po.number} ${t('updated')}` : `${t('Purchase order')} ${t('created')}`); closeModal(); render(); return; }
     let rec;
     if (po) {
       rec = store.update('purchases', po.id, out);
@@ -511,6 +524,7 @@ function renderPurchases() {
     const po = store.data.purchases.find(x => x.id === id);
     if (btn.dataset.act === 'edit') editPurchase(po);
     if (btn.dataset.act === 'del') confirmDelete(`${t('purchase order')} ${po.number}`, () => {
+      if (inServerMode()) { txCall('purchase-delete', { id }, t('Purchase order deleted')); return; }
       if (po.stock_applied) applyStock(po.items.map(it => ({ product_id: it.product_id, qty: it.qty })), -1, { reason: 'purchase-delete', ref_type: 'purchase', ref_id: po.id });
       store.remove('purchases', id);
       store.save();

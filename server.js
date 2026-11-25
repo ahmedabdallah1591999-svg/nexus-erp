@@ -22,6 +22,17 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { runTx, SERVER_OWNED } = require('./tx');
+
+/* One queue serializes every mutation (tx ops and whole-data PUTs), so a
+   business transaction never interleaves with another write: concurrent
+   conversions, double payments and lost updates are impossible. */
+let writeQueue = Promise.resolve();
+function enqueueWrite(fn) {
+  const p = writeQueue.then(fn);
+  writeQueue = p.catch(() => {});
+  return p;
+}
 
 const PORT = process.env.PORT || 8080;
 const ROOT = __dirname;
@@ -47,7 +58,7 @@ function emptyDb() {
     users: [],           // {id, username, salt, hash, role, modules[], mustChange, created_at}
     data: {
       meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1 },
-      companies: [], contacts: [], deals: [], tasks: [], activities: [],
+      companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [],
       products: [], suppliers: [], invoices: [], purchases: [],
       ledger: [], employees: [], notes: [], messages: [], accounts: [], journal: [], payments: [],
       warehouses: [], stock_moves: [], settings: {},
@@ -68,6 +79,12 @@ function saveJson(file, obj) {
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 let db = loadJson(DB_FILE, null);
+if (db && db.data) {
+  /* migrate older data files forward: any collection added later starts empty */
+  const fresh = emptyDb().data;
+  for (const k of Object.keys(fresh)) if (db.data[k] === undefined) db.data[k] = fresh[k];
+  for (const k of Object.keys(fresh.meta || {})) if (db.data.meta[k] === undefined) db.data.meta[k] = fresh.meta[k];
+}
 if (!db || !db.data || !db.users) { db = emptyDb(); saveJson(DB_FILE, db); }
 let sessions = loadJson(SESSIONS_FILE, {}); // token -> username
 const loginFails = new Map(); // ip -> {count, first} — simple brute-force brake
@@ -151,7 +168,7 @@ const api = {
       if (!username || password.length < 4) return json(res, 400, { error: 'invalid' });
       const salt = crypto.randomBytes(16).toString('hex');
     const u = { id: 1, username, salt, hash: hashPassword(salt, password), role: 'admin',
-      modules: ['dashboard','contacts','companies','deals','tasks','notes','invoices','products','purchases','suppliers','finance','employees','reports','contact'],
+      modules: ['dashboard','contacts','companies','deals','tasks','notes','quotes','invoices','products','stock','purchases','suppliers','finance','accounting','payments','employees','reports','contact'],
       mustChange: false, created_at: new Date().toISOString() };
       db.users.push(u);
       saveJson(DB_FILE, db);
@@ -196,7 +213,12 @@ const api = {
   'PUT /api/data': async (req, res, user) => {
     const b = await readBody(req);
     const incoming = b.data || {};
+    return enqueueWrite(async () => {
     for (const [coll, view] of Object.entries(COLLECTION_VIEW)) {
+      /* Server-owned collections (journal, stock moves, payments, invoices,
+         purchases, quotes, products, ledger, warehouses, accounts) are only
+         ever written by validated transactions — never from a client copy. */
+      if (SERVER_OWNED.has(coll)) continue;
       if (Array.isArray(incoming[coll]) && canView(user, view)) db.data[coll] = incoming[coll];
     }
     if (user.role === 'admin') {
@@ -211,6 +233,18 @@ const api = {
     }
     saveJson(DB_FILE, db);
     json(res, 200, { ok: true });
+    });
+  },
+
+  /* Business transactions: the server validates the actor's permission for
+     the operation, applies the business logic itself (same modules the
+     browser ships, in a sandbox), checks the accounting and stock
+     invariants, and commits atomically. */
+  'POST /api/tx': async (req, res, user) => {
+    const b = await readBody(req);
+    const r = await enqueueWrite(async () => runTx(db, user, String(b.op || ''), b, canView));
+    if (!r.ok) return json(res, r.status || 400, { error: r.error, violations: r.violations });
+    json(res, 200, { ok: true, ...r.result });
   },
 
   /* Contact-us: any signed-in user (or the setup-less public form is not a
@@ -282,7 +316,7 @@ const api = {
   },
 };
 
-const NEEDS_AUTH = new Set(['GET /api/me', 'GET /api/data', 'PUT /api/data', 'POST /api/messages',
+const NEEDS_AUTH = new Set(['GET /api/me', 'GET /api/data', 'PUT /api/data', 'POST /api/messages', 'POST /api/tx',
   'GET /api/users', 'POST /api/users', 'PATCH /api/users', 'DELETE /api/users', 'POST /api/logout']);
 
 /* ---------------- static files ---------------- */

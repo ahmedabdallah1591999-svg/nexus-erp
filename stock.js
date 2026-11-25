@@ -41,6 +41,7 @@ function recordStockMove({ product_id, warehouse_id, qty, reason, ref_type, ref_
   if (!p || !num(qty)) return null;
   ensureWarehouses();
   const wh = warehouse_id || store.data.warehouses[0].id;
+  if (!store.data.warehouses.some(w => w.id === wh)) return null;
   p.stock = Math.round((num(p.stock) + num(qty)) * 1000) / 1000;
   const row = store.add('stock_moves', {
     date: todayStr(), product_id: p.id, warehouse_id: wh,
@@ -78,6 +79,7 @@ function adjustStock(productId, warehouseId, qty, memo) {
 function transferStock(productId, fromWh, toWh, qty) {
   qty = num(qty);
   if (!(qty > 0) || fromWh === toWh) return null;
+  if (!store.data.warehouses.some(w => w.id === fromWh) || !store.data.warehouses.some(w => w.id === toWh)) return null;
   const avail = productWarehouseStock(productId)[fromWh] || 0;
   if (qty > avail + 0.0005) return null;
   const outM = recordStockMove({ product_id: productId, warehouse_id: fromWh, qty: -qty, reason: 'transfer', ref_type: 'transfer', memo: `${t('Transfer out')}` });
@@ -165,6 +167,7 @@ function renderStock() {
         <tbody>${moves || `<tr><td colspan="7" class="empty-state">${t('No movements yet.')}</td></tr>`}</tbody></table></div></div>`;
 
   $('#addWh').onclick = () => openModal(t('New warehouse'), warehouseFields(), out => {
+    if (inServerMode()) { txCall('warehouse-add', { name: out.name, location: out.location }, t('Warehouse added')); return; }
     store.add('warehouses', { name: out.name, location: out.location || '' });
     toast(t('Warehouse added'));
     render();
@@ -177,6 +180,7 @@ function renderStock() {
         { key: 'qty', label: t('Qty (negative to remove)'), type: 'number', required: true },
         { key: 'memo', label: t('Memo'), value: '', full: true },
       ], out => {
+        if (inServerMode()) { txCall('stock-adjust', { product_id: p.id, warehouse_id: Number(out.warehouse_id), qty: num(out.qty), memo: out.memo }, t('Stock adjusted')); return; }
         if (!adjustStock(p.id, Number(out.warehouse_id), num(out.qty), out.memo)) { toast(t('Adjustment failed.')); return; }
         toast(t('Stock adjusted'));
         render();
@@ -191,6 +195,7 @@ function renderStock() {
         { key: 'to', label: t('To warehouse'), type: 'select', options: warehouses.map(w => ({ value: w.id, label: w.name })) },
         { key: 'qty', label: t('Qty'), type: 'number', required: true },
       ], out => {
+        if (inServerMode()) { txCall('stock-transfer', { product_id: p.id, from: Number(out.from), to: Number(out.to), qty: num(out.qty) }, t('Stock transferred')); return; }
         if (!transferStock(p.id, Number(out.from), Number(out.to), num(out.qty))) { toast(t('Transfer failed — check quantities and warehouses.')); return; }
         toast(t('Stock transferred'));
         render();

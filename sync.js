@@ -71,6 +71,19 @@ const Sync = {
     try { await this.api('PUT', '/api/data', { data: store.data }); } catch (e) { /* offline tolerance */ }
   },
 
+  /* Server-authoritative business transaction: the server validates the
+     operation, computes the derived records (journal, stock, payments)
+     itself, checks invariants and commits atomically. On success we pull
+     the fresh permitted data so the UI shows the server's truth. */
+  async tx(op, payload) {
+    const r = await this.api('POST', '/api/tx', { op, ...(payload || {}) });
+    if (r.ok) { await this.pullData(); store.load(); }
+    return r; // { ok:true, data:{...} } or { ok:false, status, data:{error, violations?} }
+  },
+
+  /* True when business actions should go through /api/tx. */
+  authoritative() { return this.mode === 'server'; },
+
   async sendMessage(name, subject, body) {
     return this.api('POST', '/api/messages', { name, body: '[' + subject + '] ' + body });
   },

@@ -74,6 +74,7 @@ function editQuote(quote) {
       notes: form.querySelector('[name=notes]').value.trim(),
       items,
     };
+    if (inServerMode()) { txCall('quote-save', { id: quote && quote.id, out }, quote ? `${t('Quote')} ${quote.number} ${t('updated')}` : `${t('Quote')} ${t('created')}`); closeModal(); render(); modalSubmit = null; return; }
     if (quote) {
       store.update('quotes', quote.id, out);
       toast(`${t('Quote')} ${quote.number} ${t('updated')}`);
@@ -93,6 +94,7 @@ function editQuote(quote) {
    stay governed by the invoice's own status rules. */
 function convertQuoteToInvoice(q) {
   if (q.invoiced_invoice_id) { alert(t('This quote was already converted to an invoice.')); return; }
+  if (inServerMode()) { txCall('quote-convert', { id: q.id }, `${t('Quote')} ${q.number} → ${t('Invoice')}`); return; }
   const inv = {
     status: 'draft',
     contact_id: q.contact_id,
@@ -156,7 +158,10 @@ function renderQuotes() {
     if (!q) return;
     if (btn.dataset.act === 'edit') editQuote(q);
     if (btn.dataset.act === 'convert') convertQuoteToInvoice(q);
-    if (btn.dataset.act === 'del') confirmDelete(`${t('Quote')} ${q.number}`, () => { store.remove('quotes', id); render(); });
+    if (btn.dataset.act === 'del') confirmDelete(`${t('Quote')} ${q.number}`, () => {
+      if (inServerMode()) { txCall('quote-delete', { id }, t('Quote deleted')); return; }
+      store.remove('quotes', id); render();
+    });
   });
 }
 

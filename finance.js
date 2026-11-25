@@ -25,6 +25,7 @@ function addLedgerEntry(type) {
     out.ref_type = null;
     out.ref_id = null;
     if (!out.date) out.date = todayStr();
+    if (inServerMode()) { txCall('ledger-entry', out, type === 'income' ? t('Income recorded') : t('Expense recorded')); return; }
     store.add('ledger', out);
     toast(type === 'income' ? t('Income recorded') : t('Expense recorded'));
     render();
@@ -115,6 +116,11 @@ function runPayroll() {
   const active = store.data.employees.filter(e => e.status === 'active');
   if (!active.length) { alert(t('No active employees.')); return; }
   const total = active.reduce((s, e) => s + num(e.salary), 0);
+  if (inServerMode()) {
+    if (window.confirm(t('Post payroll for {month}?').replace('{month}', m) + `\n\n${active.length} ${t('active employees')}, ${t('total')} ${money(total)}.`))
+      txCall('payroll', { month: m }, t('Payroll posted'));
+    return;
+  }
   if (!window.confirm(t('Post payroll for {month}?').replace('{month}', m) + `\n\n${active.length} ${t('active employees')}, ${t('total')} ${money(total)}.\n${t('This adds one expense entry per employee to the ledger.')}`)) return;
   active.forEach(e => {
     store.add('ledger', {

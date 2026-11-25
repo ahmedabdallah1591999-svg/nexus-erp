@@ -176,6 +176,7 @@ function addJournalEntry() {
     for (let n = 1; n <= 4; n++) {
       if (out[`a${n}`]) lines.push({ account_id: out[`a${n}`], debit: num(out[`d${n}`]), credit: num(out[`c${n}`]) });
     }
+    if (inServerMode()) { txCall('journal', { date: out.date, memo: out.memo, lines }, t('Journal entry posted')); return; }
     const e = postJournal({ date: out.date, memo: out.memo, lines });
     if (!e) { toast(t('Journal entry must have at least two lines and balance (debits = credits).')); return; }
     toast(t('Journal entry posted'));
@@ -236,6 +237,7 @@ function renderAccounting() {
   $('#addJournal').onclick = addJournalEntry;
   $('#view-accounting').querySelectorAll('button[data-act="rev"]').forEach(btn => {
     btn.onclick = () => {
+      if (inServerMode()) { txCall('journal-reverse', { id: Number(btn.dataset.id) }, t('Reversal posted')); return; }
       const e = reverseJournal(Number(btn.dataset.id));
       if (e) { toast(t('Reversal posted')); render(); }
     };
