@@ -316,6 +316,24 @@ function exportSheets() {
       })],
   });
 
+  if (typeof ensureCOA === 'function') ensureCOA();
+  sheets.push({
+    name: t('Chart of accounts'),
+    view: 'accounting',
+    rows: [[t('Code'), t('Account'), t('Type'), t('Balance')],
+      ...(d.accounts || []).map(a => [a.code || '', a.name || '', t(a.type || ''), naturalBalance(a)])],
+  });
+
+  sheets.push({
+    name: t('Journal'),
+    view: 'accounting',
+    rows: [[t('Entry #'), t('Date'), t('Memo'), t('Account'), t('Debit'), t('Credit')],
+      ...(d.journal || []).flatMap(j => j.lines.map(l => {
+        const a = (d.accounts || []).find(x => x.id === l.account_id);
+        return [j.id, j.date || '', j.memo || '', a ? `${a.code} ${a.name}` : '', l.debit || '', l.credit || ''];
+      }))],
+  });
+
   sheets.push({
     name: t('Companies'),
     view: 'companies',

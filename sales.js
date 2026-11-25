@@ -310,6 +310,16 @@ function saveInvoice(existing, out) {
     applyStock(inv.items, +1);
     inv.stock_applied = false;
   }
+  // accrual book: AR/revenue when the invoice leaves draft, cash when paid
+  if (typeof ensureCOA === 'function') {
+    ensureCOA();
+    if (inv.status !== 'draft' && !inv.journal_sent) {
+      if (postInvoiceSentJournal(inv)) inv.journal_sent = true;
+    }
+    if (inv.status === 'paid' && !inv.journal_paid) {
+      if (postInvoicePaidJournal(inv)) inv.journal_paid = true;
+    }
+  }
   // paid invoices post income to the ledger once
   if (inv.status === 'paid' && !inv.ledger_posted) {
     store.add('ledger', {
@@ -433,6 +443,10 @@ function editPurchase(po) {
       applyStock(rec.items.map(it => ({ product_id: it.product_id, qty: it.qty })), +1);
       rec.stock_applied = true;
       rec.received_date = todayStr();
+    }
+    if (typeof ensureCOA === 'function' && rec.status === 'received' && !rec.journal_received) {
+      ensureCOA();
+      if (postPurchaseReceivedJournal(rec)) rec.journal_received = true;
     }
     if (rec.status === 'received' && !rec.ledger_posted) {
       store.add('ledger', {

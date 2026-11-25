@@ -123,6 +123,7 @@ function runPayroll() {
       memo: `Salary ${m} - ${e.name}`,
     });
   });
+  if (typeof ensureCOA === 'function') { ensureCOA(); postPayrollJournal(m, total); }
   toast(t('Payroll posted'));
   render();
 }
