@@ -3,20 +3,42 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Nexus ERP</title>
-<link rel="stylesheet" href="styles.css?v=3">
+<title>أحمد عبدالله بيزنس ديفيلوبمنت</title>
+<link rel="stylesheet" href="styles.css?v=4">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
 </head>
 <body>
-<div class="app">
+
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="brand login-brand">
+      <span class="brand-mark">أ</span>
+      <span class="brand-name">أحمد عبدالله بيزنس ديفيلوبمنت</span>
+    </div>
+    <form id="loginForm">
+      <div class="field"><label data-i18n="Username">Username</label><input id="loginUser" autocomplete="username" required></div>
+      <div class="field"><label data-i18n="Password">Password</label><input id="loginPass" type="password" autocomplete="current-password" required></div>
+      <div id="loginError" class="login-error hidden" data-i18n="Wrong username or password.">Wrong username or password.</div>
+      <button type="submit" class="primary-btn login-btn" data-i18n="Sign in">Sign in</button>
+    </form>
+    <div class="lang-switch login-lang" role="group" aria-label="Language">
+      <button data-lang="en" class="lang-btn">English</button>
+      <button data-lang="ar" class="lang-btn active">العربية</button>
+      <button data-lang="de" class="lang-btn">Deutsch</button>
+    </div>
+  </div>
+</div>
+
+<div class="app app-locked">
   <aside class="sidebar">
     <div class="brand">
-      <span class="brand-mark">N</span>
-      <span class="brand-name">Nexus ERP</span>
+      <span class="brand-mark">أ</span>
+      <span class="brand-name">أحمد عبدالله بيزنس ديفيلوبمنت</span>
     </div>
     <nav class="nav">
       <div class="nav-section" data-i18n="Overview">Overview</div>
       <button class="nav-item active" data-view="dashboard"><span class="ico">▦</span> <span data-i18n="Dashboard">Dashboard</span></button>
+      <button class="nav-item" data-view="notes"><span class="ico">📝</span> <span data-i18n="Notes">Notes</span></button>
       <div class="nav-section" data-i18n="CRM">CRM</div>
       <button class="nav-item" data-view="contacts"><span class="ico">👤</span> <span data-i18n="Contacts">Contacts</span></button>
       <button class="nav-item" data-view="companies"><span class="ico">🏢</span> <span data-i18n="Companies">Companies</span></button>
@@ -31,6 +53,10 @@
       <button class="nav-item" data-view="finance"><span class="ico">💰</span> <span data-i18n="Finance">Finance</span></button>
       <button class="nav-item" data-view="employees"><span class="ico">🧑‍🤝‍🧑</span> <span data-i18n="Employees">Employees</span></button>
       <button class="nav-item" data-view="reports"><span class="ico">📈</span> <span data-i18n="Reports">Reports</span></button>
+      <button class="nav-item" data-view="contact"><span class="ico">✉️</span> <span data-i18n="Contact us">Contact us</span></button>
+      <div class="nav-section admin-only" data-i18n="Administration">Administration</div>
+      <button class="nav-item admin-only" data-view="inbox"><span class="ico">📥</span> <span data-i18n="Inbox">Inbox</span> <span id="inboxBadge" class="badge-count" style="display:none"></span></button>
+      <button class="nav-item admin-only" data-view="users"><span class="ico">🔑</span> <span data-i18n="Users">Users</span></button>
     </nav>
     <div class="sidebar-foot">
       <div class="lang-caption">🌐 <span data-i18n="Language">Language</span></div>
@@ -39,8 +65,10 @@
         <button data-lang="ar" class="lang-btn active">العربية</button>
         <button data-lang="de" class="lang-btn">Deutsch</button>
       </div>
-      <button id="exportBtn" class="ghost-btn" data-i18n-title="Download all data as JSON" title="Download all data as JSON">⬇ <span data-i18n="Export data">Export data</span></button>
-      <label class="ghost-btn" data-i18n-title="Restore from a JSON export" title="Restore from a JSON export">⬆ <span data-i18n="Import">Import</span><input type="file" id="importInput" accept="application/json" hidden></label>
+      <button id="exportExcelBtn" class="ghost-btn admin-only" data-i18n-title="Download everything as an Excel file with charts" title="Download everything as an Excel file with charts">📊 <span data-i18n="Export to Excel">Export to Excel</span></button>
+      <button id="exportDriveBtn" class="ghost-btn admin-only" data-i18n-title="Export the Excel file straight to Google Drive" title="Export the Excel file straight to Google Drive">☁️ <span data-i18n="Export to Google Drive">Export to Google Drive</span></button>
+      <button id="exportBtn" class="ghost-btn admin-only" data-i18n-title="Download all data as JSON" title="Download all data as JSON">⬇ <span data-i18n="Export data">Export data</span></button>
+      <label class="ghost-btn admin-only" data-i18n-title="Restore from a JSON export" title="Restore from a JSON export">⬆ <span data-i18n="Import">Import</span><input type="file" id="importInput" accept="application/json" hidden></label>
     </div>
   </aside>
 
@@ -57,9 +85,17 @@
         <button data-lang="de" class="lang-btn-top">Deutsch</button>
       </div>
       <button id="quickAddBtn" class="primary-btn">+ <span data-i18n="New">New</span></button>
+      <div id="userChip" class="user-chip" style="display:none">
+        <span class="user-avatar">👤</span>
+        <span id="userChipName"></span>
+        <span id="userChipRole" class="user-role"></span>
+        <button id="changePassBtn" class="icon-btn" data-i18n-title="Change password" title="Change password">🔒</button>
+        <button id="logoutBtn" class="icon-btn" data-i18n-title="Sign out" title="Sign out">⏻</button>
+      </div>
     </header>
 
     <section id="view-dashboard" class="view"></section>
+    <section id="view-notes" class="view hidden"></section>
     <section id="view-contacts" class="view hidden"></section>
     <section id="view-companies" class="view hidden"></section>
     <section id="view-deals" class="view hidden"></section>
@@ -71,6 +107,9 @@
     <section id="view-finance" class="view hidden"></section>
     <section id="view-employees" class="view hidden"></section>
     <section id="view-reports" class="view hidden"></section>
+    <section id="view-contact" class="view hidden"></section>
+    <section id="view-inbox" class="view hidden"></section>
+    <section id="view-users" class="view hidden"></section>
   </main>
 </div>
 
@@ -86,13 +125,18 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script src="i18n.js?v=3"></script>
-<script src="core.js?v=2"></script>
-<script src="seed.js?v=2"></script>
-<script src="crm.js?v=2"></script>
-<script src="sales.js?v=2"></script>
-<script src="finance.js?v=2"></script>
-<script src="dashboard.js?v=2"></script>
-<script src="boot.js?v=2"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="i18n.js?v=4"></script>
+<script src="i18n-extra.js?v=4"></script>
+<script src="core.js?v=4"></script>
+<script src="seed.js?v=4"></script>
+<script src="crm.js?v=4"></script>
+<script src="sales.js?v=4"></script>
+<script src="finance.js?v=4"></script>
+<script src="dashboard.js?v=4"></script>
+<script src="auth.js?v=4"></script>
+<script src="extras.js?v=4"></script>
+<script src="export.js?v=4"></script>
+<script src="boot.js?v=4"></script>
 </body>
 </html>

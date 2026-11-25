@@ -1,9 +1,9 @@
-# Nexus ERP
+# أحمد عبدالله بيزنس ديفيلوبمنت — Nexus ERP
 
 A complete, integrated **ERP + CRM system** that runs entirely in the browser.
-No backend, no build step, no dependencies — open it and work.
+No backend, no build step — open it and work. Data is stored in the browser.
 
-**Live app:** open `index.html` (or see *Run it* below).
+**Live app:** https://ahmedabdallah1591999-svg.github.io/nexus-erp/
 
 ---
 
@@ -12,6 +12,7 @@ No backend, no build step, no dependencies — open it and work.
 | Area | What it does |
 | --- | --- |
 | **Dashboard** | Business at a glance: pipeline value, outstanding invoices, monthly net, open tasks, low-stock alerts, recent activity |
+| **Notes** | General team notes with pinning — جديد |
 | **CRM — Contacts** | People with company links, status (lead/active/inactive), tags, notes, activity log |
 | **CRM — Companies** | Accounts with contact info, linked people count, open pipeline value |
 | **CRM — Deals** | Kanban pipeline (Lead → Qualified → Proposal → Negotiation → Won/Lost) with drag-and-drop stage changes |
@@ -23,15 +24,52 @@ No backend, no build step, no dependencies — open it and work.
 | **Finance** | Income/expense ledger with monthly totals; invoice payments, received purchases and payroll post here automatically |
 | **Employees** | Staff records with salary; one-click monthly payroll run (duplicate-safe) |
 | **Reports** | Sales by month, deal pipeline, top products by units sold, expenses by category, win rate, stock value |
+| **Contact us** | A written message form — messages land in the admin's **Inbox** — جديد |
+| **Users & access** | Username/password sign-in with per-section permissions per employee — جديد |
+| **Excel export** | Every module exported to one `.xlsx` file, with a summary sheet and a charts sheet (embedded chart images) — جديد |
+| **Google Drive export** | Send the same Excel file straight to Google Drive (one-time setup, see below) — جديد |
 
-Everything is connected: an invoice draws on CRM contacts and inventory items,
-its payment lands in the finance ledger, and the dashboard aggregates all of it.
+## Sign-in & access control — جديد
+
+- First run creates one admin account: username **admin**, password **admin123**.
+  You are **forced to choose a new password** on first sign-in.
+- The admin can create employee accounts from **🔑 Users**, choose which sections
+  each employee can open, and reset passwords.
+- Employees see only their allowed sections; the sidebar, search and direct links
+  all respect the permissions.
+- Export (Excel / Drive / JSON) and import are admin-only.
+- Messages sent through **Contact us** are readable only by the admin (📥 Inbox).
+
+**Honest scope:** this access control runs inside the browser on each device.
+It keeps casual users out of sections they should not see, but the data file is
+still local — it is not server-side security. Real multi-user security needs a
+server database.
+
+## Excel export with charts — جديد
+
+**📊 Export to Excel** downloads one workbook containing every module as a sheet,
+a **Summary** sheet with the key numbers, and a **Charts** sheet with rendered
+charts (sales by month, expenses by category, pipeline, top products) embedded
+as images. The file is built entirely in the browser (via JSZip, vendored in
+`vendor/`) — no server, nothing uploaded anywhere.
+
+## Google Drive export — one-time setup
+
+The app needs a Google OAuth **Client ID** to upload to Drive:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create a project,
+   enable the **Google Drive API**.
+2. Create an **OAuth client ID** (type: Web application) and add
+   `https://ahmedabdallah1591999-svg.github.io` as an authorized JavaScript origin.
+3. Copy the client ID (`….apps.googleusercontent.com`).
+4. In the app, sign in as admin → **☁️ Export to Google Drive** → paste the
+   client ID once. After that, the button uploads the Excel file to your Drive
+   (you pick the Google account in Google's own popup; scope: `drive.file`).
 
 ## Languages
 
 The full UI ships in **English, العربية (with RTL layout) and Deutsch** —
-switch from the language buttons at the bottom of the sidebar.
-Your choice is remembered.
+switch from the language buttons. Your choice is remembered.
 
 ## Run it
 
@@ -47,32 +85,30 @@ The app is 100% static. Any of these work:
 
 ## Data & privacy
 
-- All data lives in your browser's `localStorage` — nothing leaves your device.
+- All business data lives in the browser's `localStorage` — nothing leaves the device.
+- Accounts (usernames + salted password hashes) live in a separate localStorage key.
 - **Export data** downloads everything as JSON (backup / move to another device).
-- **Import** restores a previous export.
+- **Import** restores a previous export (admin only).
 - To reset to the demo data, clear the site data for the page (or the
   `nexus-erp-v1` localStorage key).
 
 ## Project structure
 
 ```
-index.html    App shell (sidebar, topbar, modal, views)
-styles.css    Theme, layout, kanban, RTL support
-i18n.js       English / Arabic / German dictionaries + language switcher
-core.js       Data layer (localStorage), helpers, modal, search, router
-seed.js       Demo dataset (loaded on first run only)
-crm.js        Contacts, companies, deals, tasks
-sales.js      Invoices, products/inventory, purchases, suppliers
-finance.js    Ledger, employees/payroll, reports
-dashboard.js  Overview view
-boot.js       Startup
-serve.js      Optional one-command local server
+index.html        App shell (sidebar, topbar, modal, views, sign-in screen)
+styles.css        Theme, layout, kanban, RTL support, new components
+i18n.js           English / Arabic / German dictionaries
+i18n-extra.js     Translations for the new modules
+core.js           Data layer, helpers, modal, search, router (with access guard)
+seed.js           Demo data (first run only)
+crm.js            Contacts, companies, deals, tasks
+sales.js          Products, suppliers, invoices, purchases
+finance.js        Ledger, employees/payroll, reports
+dashboard.js      Overview
+auth.js           Sign-in, accounts, per-section permissions
+extras.js         Notes, Contact us, admin Inbox
+export.js         Excel (.xlsx) builder with embedded charts + Google Drive upload
+vendor/jszip.min.js  JSZip (MIT) — the only vendored library, used for .xlsx
+serve.js          Optional local server
+boot.js           Startup
 ```
-
-## Tech notes
-
-- Vanilla HTML/CSS/JS, zero dependencies, no build step.
-- Renders each view in a single pass; safe for thousands of records.
-- All user input is escaped before rendering.
-- Storage writes are failure-safe (quota errors surface a warning instead of
-  losing the UI state).

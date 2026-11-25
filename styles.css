@@ -279,3 +279,51 @@ table.data tbody tr:hover { background: #f8f9ff; }
   #quickAddBtn { order: 3; }
   .form-grid { grid-template-columns: 1fr; }
 }
+
+/* ---------------- Sign-in screen ---------------- */
+#loginScreen { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #0f172a 0%, #1e293b 60%, #312e81 100%); }
+#loginScreen.hidden { display: none; }
+.login-card { background: #fff; border-radius: 16px; padding: 34px 34px 24px; width: min(380px, calc(100vw - 40px)); box-shadow: 0 24px 60px rgba(0,0,0,.35); }
+.login-brand { justify-content: center; padding: 0 0 18px; }
+.login-brand .brand-name { color: var(--ink); font-size: 15px; text-align: center; line-height: 1.35; }
+#loginForm .field { margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px; }
+#loginForm .field label { font-size: 12.5px; color: var(--muted); }
+#loginForm input { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+#loginForm input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.login-error { color: var(--red); font-size: 13px; margin-bottom: 10px; }
+.login-btn { width: 100%; padding: 11px; font-size: 14.5px; }
+.login-lang { margin-top: 16px; }
+.login-lang .lang-btn { border-color: var(--line); color: var(--muted); }
+.login-lang .lang-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.app-locked { display: none; }
+
+/* ---------------- User chip ---------------- */
+.user-chip { display: flex; align-items: center; gap: 6px; background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 4px 8px 4px 12px; font-size: 13px; white-space: nowrap; }
+[dir="rtl"] .user-chip { padding: 4px 12px 4px 8px; }
+.user-role { font-size: 11px; color: var(--muted); background: var(--bg); border-radius: 999px; padding: 2px 8px; }
+
+/* ---------------- Notes ---------------- */
+.notes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.note-card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.note-card.pinned { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
+.note-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.note-head .title { font-weight: 650; font-size: 14.5px; }
+.note-body { font-size: 13.5px; color: var(--ink); white-space: pre-wrap; }
+.note-card .meta { font-size: 11.5px; color: var(--muted); }
+
+/* ---------------- Inbox ---------------- */
+.msg-item { display: flex; gap: 12px; padding: 14px 6px; border-bottom: 1px solid var(--line); align-items: flex-start; }
+.msg-item:last-child { border-bottom: 0; }
+.msg-item.unread .title { font-weight: 700; }
+.msg-body { font-size: 13.5px; margin-top: 6px; white-space: pre-wrap; }
+.badge-count { background: var(--red); color: #fff; border-radius: 999px; font-size: 11px; padding: 1px 7px; margin-inline-start: auto; }
+
+/* ---------------- Checkbox grid (user permissions) ---------------- */
+.check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; padding: 4px 0; }
+.check-item { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+
+/* ---------------- Contact form ---------------- */
+.contact-panel { max-width: 640px; padding: 18px; }
+
+/* Brand name is long — keep it tidy in the sidebar */
+.brand-name { font-size: 12.5px; line-height: 1.35; }

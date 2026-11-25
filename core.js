@@ -18,6 +18,14 @@ const STAGE_COLORS = {
    and editors here so core can route, search and cross-link. */
 const App = { views: {}, quickAdd: {}, editors: {} };
 
+/* Display labels per view (used for access-control checkboxes). */
+const VIEW_LABELS = {
+  dashboard: 'Dashboard', contacts: 'Contacts', companies: 'Companies', deals: 'Deals',
+  tasks: 'Tasks', notes: 'Notes', invoices: 'Invoices', products: 'Inventory',
+  purchases: 'Purchases', suppliers: 'Suppliers', finance: 'Finance', employees: 'Employees',
+  reports: 'Reports', contact: 'Contact us',
+};
+
 /* ---------------- Data layer ---------------- */
 
 function emptyData() {
@@ -25,7 +33,8 @@ function emptyData() {
     meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1 },
     companies: [], contacts: [], deals: [], tasks: [], activities: [],
     products: [], suppliers: [], invoices: [], purchases: [],
-    ledger: [], employees: [],
+    ledger: [], employees: [], notes: [], messages: [],
+    settings: {},
   };
 }
 
@@ -152,6 +161,10 @@ function openModal(title, fields, onSubmit) {
         }).join('') + '</select>';
     } else if (f.type === 'textarea') {
       control = `<textarea name="${f.key}" placeholder="${esc(f.placeholder || '')}">${esc(val)}</textarea>`;
+    } else if (f.type === 'modules') {
+      const selected = Array.isArray(val) ? val : [];
+      control = '<div class="check-grid">' + GRANTABLE_VIEWS.map(v =>
+        `<label class="check-item"><input type="checkbox" name="${f.key}" value="${v}"${selected.includes(v) ? ' checked' : ''}> ${esc(t(VIEW_LABELS[v] || v))}</label>`).join('') + '</div>';
     } else {
       control = `<input name="${f.key}" type="${f.type || 'text'}" value="${esc(val)}" placeholder="${esc(f.placeholder || '')}"${req}${f.type === 'number' ? ' step="any"' : ''}>`;
     }
@@ -180,8 +193,18 @@ function bindModal() {
   $('#modalForm').addEventListener('submit', e => {
     e.preventDefault();
     if (!e.target.reportValidity()) return;
+    const fd = new FormData(e.target);
     const out = {};
-    new FormData(e.target).forEach((v, k) => { out[k] = typeof v === 'string' ? v.trim() : v; });
+    for (const k of new Set(fd.keys())) {
+      const all = fd.getAll(k);
+      out[k] = all.length > 1 ? all : (typeof all[0] === 'string' ? all[0].trim() : all[0]);
+    }
+    // unchecked checkbox groups never appear in FormData — restore them as empty lists
+    e.target.querySelectorAll('.check-grid').forEach(grid => {
+      const name = grid.querySelector('input')?.name;
+      if (name && out[name] === undefined) out[name] = [];
+      else if (name && !Array.isArray(out[name])) out[name] = [out[name]];
+    });
     const fn = modalSubmit;
     closeModal();
     if (fn) fn(out);
@@ -195,30 +218,31 @@ function confirmDelete(label, fn) {
 /* ---------------- Search ---------------- */
 
 function runSearch(q) {
+  const allowed = m => (typeof Auth === 'undefined' || !Auth.current) ? true : Auth.can(m);
   const needle = q.toLowerCase();
   const hits = [];
-  store.data.contacts.forEach(c => {
+  if (allowed('contacts')) store.data.contacts.forEach(c => {
     if (`${contactName(c)} ${c.email} ${c.phone} ${c.position} ${c.tags}`.toLowerCase().includes(needle))
       hits.push({ kind: t('Contact'), label: contactName(c), sub: c.email || c.phone || '', go: () => App.editors.contact(c) });
   });
-  store.data.companies.forEach(c => {
+  if (allowed('companies')) store.data.companies.forEach(c => {
     if (`${c.name} ${c.industry} ${c.email}`.toLowerCase().includes(needle))
       hits.push({ kind: t('Company'), label: c.name, sub: c.industry || '', go: () => App.editors.company(c) });
   });
-  store.data.deals.forEach(x => {
+  if (allowed('deals')) store.data.deals.forEach(x => {
     if (`${x.title} ${x.stage} ${x.notes}`.toLowerCase().includes(needle))
       hits.push({ kind: t('Deal'), label: x.title, sub: `${t(x.stage)} · ${money0(x.value)}`, go: () => App.editors.deal(x) });
   });
-  store.data.products.forEach(p => {
+  if (allowed('products')) store.data.products.forEach(p => {
     if (`${p.name} ${p.sku} ${p.category}`.toLowerCase().includes(needle))
       hits.push({ kind: t('Product'), label: p.name, sub: `${p.sku} · ${t('stock')} ${p.stock}`, go: () => App.editors.product(p) });
   });
-  store.data.invoices.forEach(inv => {
+  if (allowed('invoices')) store.data.invoices.forEach(inv => {
     const c = inv.contact_id ? store.contact(inv.contact_id) : null;
     if (`${inv.number} ${inv.status} ${c ? contactName(c) : ''}`.toLowerCase().includes(needle))
       hits.push({ kind: t('Invoice'), label: inv.number, sub: `${t(inv.status)} · ${money(invoiceTotal(inv))}`, go: () => App.editors.invoice(inv) });
   });
-  store.data.suppliers.forEach(s => {
+  if (allowed('suppliers')) store.data.suppliers.forEach(s => {
     if (`${s.name} ${s.contact_person} ${s.email}`.toLowerCase().includes(needle))
       hits.push({ kind: t('Supplier'), label: s.name, sub: s.contact_person || '', go: () => App.editors.supplier(s) });
   });
@@ -258,6 +282,7 @@ function bindQuickAdd() {
 
 function bindExportImport() {
   $('#exportBtn').onclick = () => {
+    if (typeof Auth !== 'undefined' && Auth.current && !Auth.isAdmin()) { alert(t('Only the admin can export data.')); return; }
     const blob = new Blob([JSON.stringify(store.data, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -267,6 +292,7 @@ function bindExportImport() {
     toast(t('Data exported'));
   };
   $('#importInput').addEventListener('change', e => {
+    if (typeof Auth !== 'undefined' && Auth.current && !Auth.isAdmin()) { alert(t('Only the admin can import data.')); return; e.target.value=''; }
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
@@ -297,6 +323,7 @@ function render() {
 }
 
 function switchView(name) {
+  if (typeof Auth !== 'undefined' && Auth.current && !Auth.can(name)) name = Auth.firstAllowed();
   currentView = name;
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === name));
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
