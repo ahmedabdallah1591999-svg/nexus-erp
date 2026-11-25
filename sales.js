@@ -710,9 +710,10 @@ function renderPurchases() {
       <td>${s ? esc(s.name) : '—'}</td>
       <td><div>${esc(po.order_date || '—')}</div>${po.received_date ? `<div class="cell-sub">${t('received')} ${esc(po.received_date)}</div>` : ''}</td>
       <td>${money(purchaseTotal(po))}</td>
-      <td><span class="badge ${po.status === 'received' ? 'won' : 'open'}">${t(po.status)}</span>${(po.receipts || []).length && po.status !== 'received' ? `<div class="cell-sub">${t('Partly received (value)')}: ${money((po.receipts || []).reduce((a, r) => a + num(r.amount), 0))} / ${money(purchaseTotal(po))}</div>` : ''}</td>
+      <td><span class="badge ${po.status === 'received' ? 'won' : 'open'}">${t(po.status)}</span>${(po.receipts || []).some(r => !r.void) && po.status !== 'received' ? `<div class="cell-sub">${t('Partly received (value)')}: ${money((po.receipts || []).filter(r => !r.void).reduce((a, r) => a + num(r.amount), 0))} / ${money(purchaseTotal(po))}</div>` : ''}</td>
       <td class="row-actions">
         ${(po.status === 'ordered' && inServerMode() && (po.items || []).length && (po.items || []).every(it => it.product_id != null)) ? `<button class="icon-btn" data-act="receive" data-id="${po.id}" title="${t('Receive goods')}">📥</button>` : ''}
+        ${(po.status === 'ordered' && inServerMode() && Auth.current && Auth.current.role === 'admin' && (po.receipts || []).some(r => !r.void)) ? `<button class="icon-btn" data-act="voidreceipt" data-id="${po.id}" title="${t('Void last receipt')}">↩</button>` : ''}
         ${po.status === 'received' ? `<button class="icon-btn" data-act="preturn" data-id="${po.id}" title="${t('Return to supplier')}">↩️</button>` : ''}
         <button class="icon-btn" data-act="edit" data-id="${po.id}" title="${t('Edit')}">✏️</button>
         <button class="danger-btn" data-act="del" data-id="${po.id}" title="${t('Delete')}">🗑</button>
@@ -738,6 +739,15 @@ function renderPurchases() {
     const id = Number(btn.dataset.id);
     const po = store.data.purchases.find(x => x.id === id);
     if (btn.dataset.act === 'receive') { openReceive(po); return; }
+    if (btn.dataset.act === 'voidreceipt') {
+      const last = (po.receipts || []).filter(r => !r.void).pop();
+      if (!last) return;
+      const reason = window.prompt(t('Reason for voiding (at least 5 characters)'));
+      if (!reason || reason.trim().length < 5) { toast(t('A void reason of at least 5 characters is required')); return; }
+      if (!window.confirm(t('Void this document? The original stays on the record and its posting is reversed.'))) return;
+      txCall('purchase-receipt-void', { id: po.id, n: last.n, reason: reason.trim() }, t('Document voided'));
+      return;
+    }
     if (btn.dataset.act === 'preturn') { openPurchaseReturn(po); return; }
     if (btn.dataset.act === 'edit') editPurchase(po);
     if (btn.dataset.act === 'del') confirmDelete(`${t('purchase order')} ${po.number}`, () => {

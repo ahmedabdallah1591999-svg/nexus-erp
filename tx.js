@@ -641,7 +641,7 @@ const OPS = {
       if (p.id != null) {
         rec = S.data.purchases.find(x => x.id === Number(p.id));
         need(rec, 'purchase not found');
-        if ((rec.receipts || []).length && rec.status !== 'received') {
+        if ((rec.receipts || []).some(r => !r.void) && rec.status !== 'received') {
           /* partially received: goods and payables are already posted for part of it. Only the note can change;
              the rest is received through purchase-receive so every receipt stays on the record. */
           const sameLines = fields.status === 'ordered' && fields.supplier_id === (rec.supplier_id || null)
@@ -730,7 +730,7 @@ const OPS = {
       });
       for (const r of recv) {
         const it = po.items[r.line];
-        const prev = r2(po.receipts.reduce((a, rc) => a + ((rc.items || []).filter(x => x.line === r.line).reduce((b, x) => b + (x.amount != null ? ctx.num(x.amount) : r2(x.qty * ctx.num(it.cost))), 0)), 0));
+        const prev = r2(po.receipts.filter(rc => !rc.void).reduce((a, rc) => a + ((rc.items || []).filter(x => x.line === r.line).reduce((b, x) => b + (x.amount != null ? ctx.num(x.amount) : r2(x.qty * ctx.num(it.cost))), 0)), 0));
         const cum = ctx.num(it.received_qty) + r.qty;
         r.amount = r2((cum >= ctx.num(it.qty) - 1e-9 ? lineVal[r.line] : r2(lineVal[r.line] * cum / ctx.num(it.qty))) - prev);
       }
@@ -753,13 +753,47 @@ const OPS = {
     },
   },
 
+  /* Void the LATEST active receipt of a still-partly-received purchase. Admin only, reason required.
+     The receipt stays on the record (void with who/when/why); its journal is reversed at the original
+     amount, the goods leave stock only if still on hand, and the received quantities are freed. A fully
+     received purchase is accounting history and is corrected by a supplier return instead. */
+  'purchase-receipt-void': {
+    view: 'purchases',
+    run(ctx, p, user) {
+      need(user && user.role === 'admin', 'only an admin can void a receipt');
+      const S = ctx.store, r2 = v => Math.round(v * 100) / 100;
+      const po = S.data.purchases.find(x => x.id === Number(p.id));
+      need(po, 'purchase not found');
+      need(po.status === 'ordered' && !po.journal_received, 'only a partly received purchase can have a receipt voided; a fully received one is corrected with a supplier return');
+      need(String(p.reason || '').trim().length >= 5, 'a void reason of at least 5 characters is required');
+      const active = (po.receipts || []).filter(r => !r.void);
+      need(active.length > 0, 'there is no active receipt to void');
+      const rc = active[active.length - 1];
+      need(Number(p.n) === rc.n, 'only the latest active receipt can be voided (receipt ' + rc.n + ')');
+      const j = S.data.journal.find(x => x.id === rc.journal_id);
+      need(j && j.ref_type === 'purchase' && j.ref_id === po.id, 'the receipt posting was not found; review it manually');
+      for (const it of rc.items) {
+        const li = po.items[it.line], pr = S.data.products.find(x => x.id === Number(li.product_id));
+        need(pr && ctx.num(pr.stock) >= it.qty, `cannot void: the ${it.qty} unit(s) of ${pr ? pr.name : li.product_id} received are no longer on hand`);
+      }
+      need(ctx.postJournal({ date: ctx.todayStr(), memo: `Void of ${po.number} receipt ${rc.n}: ${String(p.reason).trim()}`, ref_type: 'purchase-receipt-void', ref_id: po.id,
+        lines: j.lines.map(l => ({ account_id: l.account_id, debit: l.credit, credit: l.debit })) }), 'reversal could not be posted');
+      ctx.applyStock(rc.items.map(it => ({ product_id: Number(po.items[it.line].product_id), qty: it.qty })), -1, { reason: 'purchase-receipt-void', ref_type: 'purchase', ref_id: po.id });
+      S.add('ledger', { date: ctx.todayStr(), type: 'income', category: 'Purchase receipt void', amount: r2(rc.amount), ref_type: 'purchase', ref_id: po.id, memo: `${po.number} receipt ${rc.n} voided` });
+      for (const it of rc.items) po.items[it.line].received_qty = Math.max(0, ctx.num(po.items[it.line].received_qty) - it.qty);
+      Object.assign(rc, { void: true, void_reason: String(p.reason).trim(), voided_by: user.username, voided_at: new Date().toISOString() });
+      S.save();
+      return { purchase: po, receipt: rc };
+    },
+  },
+
   'purchase-delete': {
     view: 'purchases',
     run(ctx, p) {
       const S = ctx.store;
       const po = S.data.purchases.find(x => x.id === Number(p.id));
       need(po, 'purchase not found');
-      need(po.status !== 'received' && !po.journal_received && !(po.receipts || []).length, 'received or partly received purchases are accounting history; they cannot be deleted');
+      need(po.status !== 'received' && !po.journal_received && !(po.receipts || []).some(r => !r.void), 'received or partly received purchases are accounting history; they cannot be deleted');
       if (po.stock_applied) ctx.applyStock(po.items.map(it => ({ product_id: it.product_id, qty: it.qty })), -1, { reason: 'purchase-delete', ref_type: 'purchase', ref_id: po.id });
       S.remove('purchases', po.id);
       return { deleted: po.id };
