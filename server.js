@@ -84,29 +84,23 @@ if (db && db.data) {
   const fresh = emptyDb().data;
   for (const k of Object.keys(fresh)) if (db.data[k] === undefined) db.data[k] = fresh[k];
   for (const k of Object.keys(fresh.meta || {})) if (db.data.meta[k] === undefined) db.data.meta[k] = fresh.meta[k];
+  /* nextId must exceed every id already in use — a stale counter would let
+     a new row collide with an existing one and corrupt account lookups */
+  let maxId = 0;
+  for (const v of Object.values(db.data)) {
+    if (!Array.isArray(v)) continue;
+    for (const row of v) if (row && Number.isFinite(row.id) && row.id > maxId) maxId = row.id;
+  }
+  if (!(db.data.meta.nextId > maxId)) db.data.meta.nextId = maxId + 1;
 }
 if (!db || !db.data || !db.users) { db = emptyDb(); saveJson(DB_FILE, db); }
 
-/* Upgrade migration: align the Inventory GL with the stock ledger for data
-   created before inventory postings existed. The pre-migration data file is
-   preserved once, next to the live file, before anything changes. */
-try {
-  const hasBooks = (db.data.products || []).length || (db.data.journal || []).length;
-  if (hasBooks) {
-    const mig = runTx(db, { role: 'admin' }, 'migrate-inventory', {}, () => true);
-    if (mig.ok && mig.result && mig.result.posted) {
-      const backup = DB_FILE + '.premigration-backup';
-      if (!fs.existsSync(backup)) {
-        /* db was mutated in place — rebuild the pre-migration file from the
-           migration entry's inverse is overkill; instead we saved nothing
-           yet, so the on-disk file IS still the pre-migration state */
-        fs.copyFileSync(DB_FILE, backup);
-      }
-      saveJson(DB_FILE, db);
-      console.log(`migration: inventory valuation aligned (gap ${mig.result.gap}), backup at ${backup}`);
-    }
-  }
-} catch (e) { console.error('inventory migration failed (data left unchanged):', e.message); }
+/* NOTE: schema additions above are automatic. Financial adjustments are
+   never auto-posted on startup: a pre-upgrade inventory valuation
+   discrepancy surfaces in the accounting view as a reconciliation item and
+   is resolved only by an authorized admin approving the proposed dated
+   adjustment (op migrate-inventory); the invariant gate blocks financial
+   postings with a clear message until then. */
 let sessions = loadJson(SESSIONS_FILE, {}); // token -> username
 const loginFails = new Map(); // ip -> {count, first} — simple brute-force brake
 
@@ -248,7 +242,7 @@ const api = {
     }
     if (incoming.meta && typeof incoming.meta === 'object') {
       const m = incoming.meta;
-      for (const k of ['nextId', 'invoiceSeq', 'purchaseSeq', 'quoteSeq']) {
+      for (const k of ['nextId', 'invoiceSeq', 'purchaseSeq', 'quoteSeq', 'orderSeq', 'returnSeq']) {
         if (Number.isFinite(m[k])) db.data.meta[k] = Math.max(db.data.meta[k] || 1, m[k]);
       }
     }
@@ -263,7 +257,19 @@ const api = {
      invariants, and commits atomically. */
   'POST /api/tx': async (req, res, user) => {
     const b = await readBody(req);
-    const r = await enqueueWrite(async () => runTx(db, user, String(b.op || ''), b, canView));
+    const r = await enqueueWrite(async () => {
+      const result = runTx(db, user, String(b.op || ''), b, canView);
+      if (result.ok) {
+        /* the admin-approved inventory adjustment is an accounting decision:
+           preserve the pre-adjustment file once before saving over it */
+        if (String(b.op) === 'migrate-inventory' && result.result && result.result.posted && fs.existsSync(DB_FILE)) {
+          const backup = DB_FILE + '.pre-inventory-adjustment-backup';
+          if (!fs.existsSync(backup)) fs.copyFileSync(DB_FILE, backup);
+        }
+        saveJson(DB_FILE, db);
+      }
+      return result;
+    });
     if (!r.ok) return json(res, r.status || 400, { error: r.error, violations: r.violations });
     json(res, 200, { ok: true, ...r.result });
   },

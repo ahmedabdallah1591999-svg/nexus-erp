@@ -531,7 +531,10 @@ const OPS = {
      postings existed. Idempotent; the invariant gate verifies the result. */
   'migrate-inventory': {
     view: 'accounting',
-    run(ctx, p) {
+    run(ctx, p, user) {
+      /* an equity-offset adjustment is an accounting decision: it posts only
+         on explicit approval by an authorized admin, never automatically */
+      need(user && user.role === 'admin', 'only an admin can approve the inventory adjustment');
       ctx.ensureCOA();
       ctx.ensureStockBaseline();
       const gap = ctx.inventoryGap();
@@ -588,12 +591,15 @@ function runTx(db, user, op, payload, canView) {
     ctx.store.data = JSON.parse(JSON.stringify(db.data));
     ctx.ensureCOA();
     ctx.ensureStockBaseline();
-    const result = spec.run(ctx, payload || {});
+    const result = spec.run(ctx, payload || {}, user);
     /* independent integrity gate on the resulting books */
     const acc = ctx.accountingInvariants();
     const stk = ctx.stockInvariants();
     if (acc.length || stk.length) {
-      return { ok: false, error: 'integrity check failed', violations: [...acc, ...stk] };
+      /* name the unresolved reconciliation clearly — dependent financial
+         postings stay blocked until an admin resolves it */
+      const vs = [...acc, ...stk];
+      return { ok: false, error: `Unreconciled books — admin review required: ${vs[0]}`, violations: vs };
     }
     /* commit: server-owned collections and protected fields come ONLY from
        the sandbox result */

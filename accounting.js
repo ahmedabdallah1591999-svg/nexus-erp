@@ -25,10 +25,39 @@ const DEFAULT_COA = [
 function ensureCOA() {
   if (!store.data.accounts) store.data.accounts = [];
   if (!store.data.journal) store.data.journal = [];
-  if (!store.data.accounts.length) {
-    for (const a of DEFAULT_COA) store.add('accounts', { code: a.code, name: a.name, type: a.type });
-    store.save();
+  const hadAccounts = store.data.accounts.length > 0;
+  /* schema addition: fill in default accounts that are missing (older
+     databases predate newer accounts like COGS) — never touches existing
+     entries or the journal */
+  let added = false;
+  for (const a of DEFAULT_COA) {
+    if (!store.data.accounts.some(x => x.code === a.code)) {
+      store.add('accounts', { code: a.code, name: a.name, type: a.type });
+      added = true;
+    }
   }
+  if (!hadAccounts) {
+    /* fresh setup with stock but no books activity yet: establish known
+       opening values explicitly. A pre-upgrade database with any journal
+       history takes the admin review path (migrateInventoryValuation) and
+       never gets an automatic equity entry. */
+    if (!store.data.journal.length) {
+      const pv = Math.round(store.data.products.reduce((s, p) => s + num(p.stock) * num(p.cost), 0) * 100) / 100;
+      if (pv > 0) {
+        postJournal({
+          date: todayStr(),
+          memo: t('Opening stock per the initial product list (fresh setup)'),
+          ref_type: 'opening', ref_id: null,
+          lines: [
+            { account_id: store.data.accounts.find(a => a.code === '1200').id, debit: pv },
+            { account_id: store.data.accounts.find(a => a.code === '3000').id, credit: pv },
+          ],
+        });
+        added = true;
+      }
+    }
+  }
+  if (added) store.save();
 }
 
 function accountByCode(code) {
@@ -283,6 +312,29 @@ function renderAccounting() {
   const sum = type => store.data.accounts.filter(a => a.type === type).reduce((s, a) => s + naturalBalance(a), 0);
   const assets = sum('asset'), liab = sum('liability'), eq = sum('equity'), rev = sum('revenue'), exp = sum('expense');
 
+  /* Unresolved inventory reconciliation: surface the discrepancy and the
+     proposed dated opening adjustment for review. The equity offset is an
+     accounting decision — only an authorized admin can approve and post it
+     (server mode enforces this again in the transaction layer). */
+  const gap = typeof inventoryGap === 'function' ? inventoryGap() : 0;
+  let reconCard = '';
+  if (Math.abs(gap) > 0.01) {
+    const inv = accountByCode('1200'), eqAcc = accountByCode('3000');
+    const side = (acc, amt) => `${acc ? esc(`${acc.code} ${acc.name}`) : '?'} ${money(amt)}`;
+    const proposal = gap > 0
+      ? `${t('Debit')} ${side(inv, gap)} · ${t('Credit')} ${side(eqAcc, gap)}`
+      : `${t('Debit')} ${side(eqAcc, -gap)} · ${t('Credit')} ${side(inv, -gap)}`;
+    const isAdmin = Auth.current && Auth.current.role === 'admin';
+    reconCard = `<div class="card" style="border-color:var(--red)">
+      <h3>${t('Unresolved inventory reconciliation')}</h3>
+      <p>${t('The Inventory account differs from the stock ledger valuation at cost by')} <strong>${money(Math.abs(gap))}</strong>.</p>
+      <p>${t('Proposed dated opening adjustment')} (${todayStr()}): ${proposal}<br><span class="cell-sub">${t('Migration: align inventory valuation with the stock ledger (pre-upgrade data)')}</span></p>
+      <p class="cell-sub">${t('Postings that affect the books are blocked until an authorized admin reviews and approves this adjustment. Existing data stays unchanged; a backup is kept before the adjustment is saved.')}</p>
+      ${isAdmin ? `<button class="primary-btn" id="approveInvAdj">${t('Approve and post adjustment')}</button>`
+                : `<p><strong>${t('Waiting for an admin to review and approve.')}</strong></p>`}
+    </div>`;
+  }
+
   const coaRows = store.data.accounts.map(a => `
     <tr><td>${esc(a.code)}</td><td>${esc(a.name)}</td><td><span class="badge inactive">${t(a.type)}</span></td>
     <td>${money(naturalBalance(a))}</td></tr>`).join('');
@@ -317,6 +369,7 @@ function renderAccounting() {
       <div class="stat-card"><div class="label">${t('Books check')}</div><div class="value" style="color:${violations.length ? 'var(--red)' : 'var(--green)'}">${violations.length ? '✗ ' + violations.length : '✓'}</div></div>
     </div>
     ${violations.length ? `<div class="card" style="border-color:var(--red)"><h3>${t('Integrity violations')}</h3><ul>${violations.map(v => `<li>${esc(v)}</li>`).join('')}</ul></div>` : ''}
+    ${reconCard}
     <div class="card"><h3>${t('Chart of accounts')}</h3>
       <div class="table-wrap"><table class="data">
         <thead><tr><th>${t('Code')}</th><th>${t('Account')}</th><th>${t('Type')}</th><th>${t('Balance')}</th></tr></thead>
@@ -327,6 +380,13 @@ function renderAccounting() {
         <tbody>${journalRows || `<tr><td colspan="5" class="empty-state">${t('No journal entries yet.')}</td></tr>`}</tbody></table></div></div>`;
 
   $('#addJournal').onclick = addJournalEntry;
+  const apBtn = $('#approveInvAdj');
+  if (apBtn) apBtn.onclick = () => {
+    if (inServerMode()) { txCall('migrate-inventory', {}, t('Adjustment posted — books reconciled')); return; }
+    const e = migrateInventoryValuation();
+    if (e) { toast(t('Adjustment posted — books reconciled')); render(); }
+    else { toast(t('Adjustment failed.')); }
+  };
   $('#view-accounting').querySelectorAll('button[data-act="rev"]').forEach(btn => {
     btn.onclick = () => {
       if (inServerMode()) { txCall('journal-reverse', { id: Number(btn.dataset.id) }, t('Reversal posted')); return; }
