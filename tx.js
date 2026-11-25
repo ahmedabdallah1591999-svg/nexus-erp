@@ -133,9 +133,11 @@ function pick(obj, keys) { const r = {}; for (const k of keys) if (obj && obj[k]
 
 function validItems(items, S) {
   need(Array.isArray(items) && items.length > 0, 'items required');
+  need(items.length <= 500, 'too many lines');
   for (const it of items) {
-    need(Number(it.qty) > 0, 'qty must be positive');
-    need(Number(it.price != null ? it.price : it.cost) >= 0, 'price must not be negative');
+    need(it && typeof it === 'object', 'bad line');
+    need(Number.isFinite(Number(it.qty)) && Number(it.qty) > 0 && Number(it.qty) <= 1e9, 'qty must be positive');
+    need(Number.isFinite(Number(it.price != null ? it.price : it.cost)) && Number(it.price != null ? it.price : it.cost) >= 0 && Number(it.price != null ? it.price : it.cost) <= 1e12, 'price must not be negative');
     /* a line that names a product must name a real one — otherwise stock
        side effects would silently no-op while flags say they happened */
     if (it.product_id != null) {
@@ -143,6 +145,13 @@ function validItems(items, S) {
       it.product_id = Number(it.product_id);
     }
   }
+  /* keep only the known line fields, as numbers: no extra keys are stored */
+  items.splice(0, items.length, ...items.map(it => {
+    const r = { product_id: it.product_id == null ? null : it.product_id, description: String(it.description || '').slice(0, 500), qty: Number(it.qty) };
+    if (it.price != null) r.price = Number(it.price);
+    if (it.cost != null) r.cost = Number(it.cost);
+    return r;
+  }));
 }
 
 /* strict quantity: a finite number or numeric string in (0, 1e9]; rejects
@@ -227,6 +236,7 @@ const OPS = {
       need(['draft', 'sent', 'accepted', 'rejected'].includes(out.status), 'bad status');
       const S = ctx.store;
       validItems(out.items, S);
+      need(ctx.num(out.tax_rate) >= 0 && ctx.num(out.tax_rate) <= 100, 'bad tax rate');
       let q;
       if (p.id != null) {
         q = S.data.quotes.find(x => x.id === Number(p.id));
@@ -284,6 +294,7 @@ const OPS = {
   'journal': {
     view: 'accounting',
     run(ctx, p) {
+      need(Array.isArray(p.lines) && p.lines.length <= 200 && p.lines.every(l => l && typeof l === 'object'), 'journal lines must be a list of line objects');
       const e = ctx.postJournal({ date: p.date, memo: p.memo, lines: p.lines });
       need(e, 'journal entry must have at least two lines and balance');
       return { entry: e };
@@ -652,6 +663,8 @@ const OPS = {
         prod = S.data.products.find(x => x.id === Number(p.id));
         need(prod, 'product not found');
         const stock = prod.stock;            // stock is server-owned
+        need(!(ctx.num(stock) > 0 && Math.abs(ctx.num(out.cost) - ctx.num(prod.cost)) > 1e-9),
+          `The cost cannot be changed while ${stock} unit(s) are in stock: the books value that stock at the old cost, so a silent change would make inventory disagree with accounting. Use "Revalue stock" (admin) to post a reviewed revaluation, or change the cost when stock is zero.`);
         Object.assign(prod, out);
         prod.stock = stock;
         S.save();
@@ -665,6 +678,39 @@ const OPS = {
         S.save();
       }
       return { product: prod };
+    },
+  },
+
+  /* Reviewed revaluation of stock on hand. Admin only. The reviewer must
+     send the exact adjustment amount they were shown (expected_value); a
+     mismatch means the stock or cost moved since the review and nothing
+     is posted. Gain/loss goes to Cost of goods sold, in its own entry. */
+  'product-revalue': {
+    view: 'products',
+    run(ctx, p, user) {
+      need(user && user.role === 'admin', 'only an admin can revalue stock');
+      const S = ctx.store, r2 = v => Math.round(v * 100) / 100;
+      const prod = S.data.products.find(x => x.id === Number(p.id));
+      need(prod, 'product not found');
+      need(String(p.reason || '').trim().length >= 3, 'a reason is required');
+      const nc = Number(p.new_cost);
+      need(Number.isFinite(nc) && nc >= 0, 'new cost must be zero or more');
+      need(Math.abs(nc - ctx.num(prod.cost)) > 1e-9, 'the new cost equals the current cost; nothing to revalue');
+      const qty = ctx.num(prod.stock);
+      need(qty > 0, 'there is no stock on hand; just change the cost on the product');
+      const delta = r2(qty * (nc - ctx.num(prod.cost)));
+      need(Number.isFinite(Number(p.expected_value)) && Math.abs(Number(p.expected_value) - delta) < 0.005,
+        `the adjustment is now ${delta.toFixed(2)} (stock ${qty} x cost change), not the reviewed amount; review it again`);
+      need(Math.abs(delta) > 0.004, 'the adjustment rounds to zero');
+      ctx.ensureCOA();
+      const inv = ctx.accountByCode('1200').id, cogs = ctx.accountByCode('5000').id;
+      const lines = delta > 0 ? [{ account_id: inv, debit: delta }, { account_id: cogs, credit: delta }] : [{ account_id: cogs, debit: -delta }, { account_id: inv, credit: -delta }];
+      const je = ctx.postJournal({ date: ctx.todayStr(), memo: `Inventory revaluation: ${prod.name} (${p.reason})`, ref_type: 'revaluation', ref_id: prod.id, lines });
+      need(je, 'revaluation could not be posted');
+      prod.cost_history = (prod.cost_history || []).concat([{ date: ctx.todayStr(), from: ctx.num(prod.cost), to: nc, qty, value: delta, by: user.username, reason: String(p.reason).trim(), journal_id: je.id }]);
+      prod.cost = nc;
+      S.save();
+      return { product: prod, adjustment: delta, journal_id: je.id };
     },
   },
 
@@ -1080,7 +1126,7 @@ const OPS = {
       }
       const inv = S.data.invoices.find(i => i.id === Number(p.invoice_id));
       need(inv, 'invoice not found');
-      need(inv.status !== 'draft' && inv.journal_sent, 'only a posted (sent or paid) invoice can be credited; edit or delete a draft instead');
+      need(['sent', 'paid'].includes(inv.status) && inv.journal_sent, 'only a posted (sent or paid) invoice can be credited; edit or delete a draft instead, and a refunded POS sale is already fully reversed');
       need(String(p.reason || '').trim().length >= 3, 'a reason is required');
       need(Array.isArray(p.items) && p.items.length > 0, 'choose at least one invoice line to credit');
       const prior = {};
@@ -1864,7 +1910,7 @@ const OPS = {
       need(!p.shift_id || shift, 'shift not open');
       const method = ['cash', 'bank', 'transfer', 'card'].includes(p.method) ? p.method : 'cash';
       const today = ctx.todayStr();
-      const taxRate = p.tax_rate != null ? ctx.num(p.tax_rate) : ctx.num(S.data.settings && S.data.settings.tax_rate);
+      const taxRate = ctx.num(S.data.settings && S.data.settings.tax_rate); /* the till can never choose the tax rate */
       need(taxRate >= 0 && taxRate <= 100, 'tax rate out of range');
       ctx.saveInvoice(null, {
         status: 'sent', contact_id: null, deal_id: null,
@@ -1900,6 +1946,7 @@ const OPS = {
       need(inv, 'invoice not found');
       need(inv.pos_ref, 'not a POS sale');
       need(inv.status === 'paid', 'only a paid POS sale can be refunded');
+      need(ctx.invoiceCreditedTotal(inv) < 0.005, 'this sale already has a credit note or return; a full refund would credit it twice');
       const method = ['cash', 'bank', 'transfer', 'card'].includes(p.method) ? p.method : (inv.pos_method || 'cash');
       const today = ctx.todayStr();
       const total = Math.round(ctx.invoiceTotal(inv) * 100) / 100;

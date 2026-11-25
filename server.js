@@ -200,7 +200,7 @@ function readBody(req) {
   return new Promise((res, rej) => {
     let b = '';
     req.on('data', c => { b += c; if (b.length > 5e6) req.destroy(); });
-    req.on('end', () => { try { res(b ? JSON.parse(b) : {}); } catch (e) { rej(e); } });
+    req.on('end', () => { try { const v = b ? JSON.parse(b) : {}; res(v && typeof v === 'object' && !Array.isArray(v) ? v : {}); } catch (e) { e.badJson = true; rej(e); } });
     req.on('error', rej);
   });
 }
@@ -327,7 +327,8 @@ const api = {
     }
     if (incoming.meta && typeof incoming.meta === 'object') {
       const m = incoming.meta;
-      for (const k of ['nextId', 'invoiceSeq', 'purchaseSeq', 'quoteSeq', 'orderSeq', 'returnSeq', 'ticketSeq', 'qcSeq', 'docSeq', 'cnSeq', 'prSeq']) {
+      /* document counters (invoiceSeq, purchaseSeq ...) are server-owned: only the row-id counter may be raised by a client */
+      for (const k of ['nextId']) {
         if (Number.isFinite(m[k])) db.data.meta[k] = Math.max(db.data.meta[k] || 1, m[k]);
       }
     }
@@ -463,6 +464,7 @@ const server = http.createServer(async (req, res) => {
     }
     return await handler(req, res);
   } catch (e) {
+    if (e && e.badJson) return json(res, 400, { error: 'invalid JSON body' });
     console.error(route, e);
     json(res, 500, { error: 'server error' });
   }

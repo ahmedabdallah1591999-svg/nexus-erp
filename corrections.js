@@ -107,3 +107,20 @@ function renderCorrections(kind) {
     <tbody>${body || `<tr><td colspan="5" class="empty-state">${t(isInv ? 'No credit notes yet.' : 'No purchase returns yet.')}</td></tr>`}</tbody></table></div>`;
   host.appendChild(div);
 }
+
+/* Reviewed revaluation of stock on hand (admin, server mode). The exact
+   amount shown here is sent back; the server refuses if it moved. */
+function openRevalue(prod) {
+  if (!inServerMode()) { toast(t('Corrections need the server.')); return; }
+  const fields = [
+    { key: 'new_cost', type: 'number', label: `${t('New cost (USD)')} (${t('Cost (USD)')}: ${num(prod.cost)}, ${t('Stock')}: ${num(prod.stock)})`, required: true, value: num(prod.cost) },
+    { key: 'reason', label: t('Reason (required)'), required: true, full: true },
+  ];
+  openModal(`${t('Revalue stock')} — ${prod.name}`, fields, out => {
+    const nc = num(out.new_cost);
+    const delta = Math.round(num(prod.stock) * (nc - num(prod.cost)) * 100) / 100;
+    if (!window.confirm(`${t('Post this inventory revaluation?')}\n${prod.name}: ${num(prod.cost)} → ${nc}\n${t('Adjustment to post (stock x cost change)')}: ${delta}`)) return;
+    txCall('product-revalue', { id: prod.id, new_cost: nc, reason: out.reason, expected_value: delta }, t('Inventory revalued'));
+    closeModal();
+  });
+}

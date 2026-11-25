@@ -31,3 +31,11 @@ Not changed / still open: Windows scripts were reviewed but never run on Windows
 - Credit notes and sales-order returns on the same invoice are allowed together, capped by the invoiced quantity per product.
 - Dashboard, Excel export and finance reports use open amount / net of credits.
 - Local single-user browser mode asks for a confirm() before posting a refund of money already paid.
+
+## hotfix4 (working tree)
+- Cost change blocked while stock exists (clear message); new admin-only `product-revalue` posts a reviewed Inventory/COGS adjustment with history.
+- Line items normalized and bounded (finite qty/price, 500 lines); quote tax 0-100; POS tax comes from settings; pos-refund blocked if credits exist; credit note needs sent/paid.
+- PUT /api/data: only meta.nextId accepted from client (document counters are server-owned).
+- Journal op rejects non-list lines (was an exception); malformed JSON gives 400 not 500.
+- Old returns flagged "Needs review" in the UI; no data rewritten.
+- See COVERAGE.md.

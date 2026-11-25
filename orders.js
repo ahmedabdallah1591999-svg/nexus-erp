@@ -215,6 +215,33 @@ function createReturn(o, items, refund) {
 }
 
 /* Shared by the local path and (inside the sandbox) the server path. */
+/* Review flags for a stored return. Nothing is changed or corrected: the
+   original row and its postings stay as evidence. A flag only says "a person
+   must look at this" (old returns were priced from the browser request and
+   paid out cash without a recorded confirmation). Derived, never stored. */
+function returnReviewFlags(r) {
+  const flags = [];
+  const o = (store.data.sales_orders || []).find(x => x.id === r.order_id);
+  if (o) {
+    for (const it of (r.items || [])) {
+      const lines = (o.items || []).filter(x => (x.product_id || null) === (it.product_id || null));
+      if (lines.length && !lines.some(x => Math.abs(num(x.price) - num(it.price)) < 0.005)) { flags.push('price differs from the order line'); break; }
+    }
+    const sold = {};
+    (o.items || []).forEach(x => { const k = x.product_id || 'n'; sold[k] = (sold[k] || 0) + num(x.qty); });
+    const back = {};
+    (store.data.returns || []).filter(x => x.order_id === o.id).forEach(x => (x.items || []).forEach(it => { const k = it.product_id || 'n'; back[k] = (back[k] || 0) + num(it.qty); }));
+    if (Object.keys(back).some(k => back[k] > (sold[k] || 0) + 0.0005)) flags.push('returned more than sold');
+  }
+  const j = (store.data.journal || []).find(x => x.ref_type === 'return' && x.ref_id === r.id);
+  if (j && r.invoice_id) {
+    const ar = accountByCode('1100');
+    const arCr = (j.lines || []).filter(l => ar && l.account_id === ar.id).reduce((s, l) => s + num(l.credit), 0);
+    if (num(r.amount) - arCr > 0.005 && !r.refund_confirmed_by) flags.push('money paid back without a recorded confirmation');
+  }
+  return flags;
+}
+
 /* How a return splits: the part that reduces what the customer still owes
    (toAR) and the part that is MORE than they owe, i.e. money they already
    paid (toCash). toCash is only a refund once someone confirms it was paid. */
@@ -294,7 +321,7 @@ function renderOrders() {
     <td><div class="cell-main">${esc(r.number)}</div><div class="cell-sub">${esc(r.date || '')}</div></td>
     <td>${esc((store.data.sales_orders.find(o => o.id === r.order_id) || {}).number || '')}</td>
     <td>${(r.items || []).map(it => { const p = it.product_id ? store.product(it.product_id) : null; return `${esc(p ? p.name : it.description || '')} × ${num(it.qty)}`; }).join(', ')}</td>
-    <td class="num">${money(r.amount || 0)}</td></tr>`).join('');
+    <td class="num">${money(r.amount || 0)}${returnReviewFlags(r).length ? `<div class="cell-sub" style="color:#b45309">⚠ ${t('Needs review')}: ${returnReviewFlags(r).map(f => t(f)).join('; ')}</div>` : ''}${r.refund_reference ? `<div class="cell-sub">${t('Refund reference (transfer / receipt no.)')}: ${esc(r.refund_reference)}</div>` : ''}</td></tr>`).join('');
 
   $('#view-orders').innerHTML = `
     <div class="view-head">
