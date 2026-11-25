@@ -159,6 +159,47 @@ function renderFinance() {
   });
 }
 
+/* ---------------- Expense requests (submitter scope) ----------------
+   The server row-scopes this collection for users without the finance
+   module, so this view only ever holds the current user's own requests;
+   the local fallback applies the same filter. Review happens in Finance. */
+
+function renderExpenses() {
+  const me = (typeof Auth !== 'undefined' && Auth.current) || null;
+  const mine = (store.data.expenses || []).slice()
+    .filter(x => (me && me.role === 'admin') || !me || inServerMode() || x.submitted_by === me.username)
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+  const rows = mine.map(x => `
+    <tr>
+      <td>${esc(x.date || '—')}</td>
+      <td>${t(x.category || 'Other')}</td>
+      <td class="overdue-text">−${money(x.amount)}</td>
+      <td>${esc(x.memo || '')}</td>
+      <td><span class="badge ${x.status === 'approved' ? 'won' : x.status === 'rejected' ? 'lost' : 'lead'}"${x.status === 'rejected' && x.reject_reason ? ` title="${esc(x.reject_reason)}"` : ''}>${t(x.status)}</span></td>
+      <td class="row-actions">
+        ${x.status === 'submitted' ? `<button class="icon-btn" data-xact="edit" data-id="${x.id}" title="${t('Edit')}">✏️</button><button class="danger-btn" data-xact="del" data-id="${x.id}" title="${t('Delete')}">🗑</button>` : ''}
+      </td>
+    </tr>`).join('');
+  $('#view-expenses').innerHTML = `
+    <div class="view-head">
+      <div><h2>${t('Expense requests')}</h2><div class="sub">${t('Submit expenses for approval — only approved expenses reach the books.')}</div></div>
+      <div class="head-actions"><button class="secondary-btn" id="reqExpense2">+ ${t('Request expense')}</button></div>
+    </div>
+    <div class="table-wrap"><table class="data">
+      <thead><tr><th>${t('Date')}</th><th>${t('Category')}</th><th>${t('Amount')}</th><th>${t('Memo')}</th><th>${t('Status')}</th><th></th></tr></thead>
+      <tbody id="expBody2">${rows || `<tr><td colspan="6" class="empty-state">${t('No expense requests yet.')}</td></tr>`}</tbody>
+    </table></div>`;
+  $('#reqExpense2').onclick = () => editExpenseRequest(null);
+  $('#expBody2').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-xact]');
+    if (!btn) return;
+    const id = Number(btn.dataset.id);
+    if (btn.dataset.xact === 'edit') editExpenseRequest((store.data.expenses || []).find(x => x.id === id));
+    else if (btn.dataset.xact === 'del') confirmDelete(t('this expense request'), () => deleteExpense(id));
+  });
+}
+App.views.expenses = renderExpenses;
+
 /* ---------------- HR / Employees ---------------- */
 
 const employeeFields = row => [

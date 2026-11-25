@@ -28,7 +28,7 @@ const MODULE_FILES = ['i18n.js', 'i18n-extra.js', 'core.js', 'seed.js', 'crm.js'
 
 /* Collections only the server may write (never accepted from a client PUT). */
 const SERVER_OWNED = new Set(['accounts', 'journal', 'payments', 'warehouses', 'stock_moves',
-  'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring']);
+  'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring', 'expenses']);
 
 /* ---------------- browser sandbox ---------------- */
 
@@ -295,7 +295,7 @@ const OPS = {
   },
 
   'expense-save': {
-    view: 'finance',
+    view: ['finance', 'expenses'],
     run(ctx, p, user) {
       const S = ctx.store;
       const out = p.out || {};
@@ -361,7 +361,7 @@ const OPS = {
     },
   },
   'expense-delete': {
-    view: 'finance',
+    view: ['finance', 'expenses'],
     run(ctx, p, user) {
       const S = ctx.store;
       const e = (S.data.expenses || []).find(x => x.id === Number(p.id));
@@ -760,7 +760,8 @@ const OPS = {
 function runTx(db, user, op, payload, canView) {
   const spec = OPS[op];
   if (!spec) return { ok: false, error: 'unknown operation' };
-  if (!canView(user, spec.view)) return { ok: false, error: 'not permitted', status: 403 };
+  const views = Array.isArray(spec.view) ? spec.view : [spec.view];
+  if (!views.some(v => canView(user, v))) return { ok: false, error: 'not permitted', status: 403 };
   let ctx;
   try {
     ctx = makeSandbox();   // the captured module API (ctx.store, ctx.saveInvoice, ...)

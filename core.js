@@ -23,7 +23,7 @@ const VIEW_LABELS = {
   dashboard: 'Dashboard', contacts: 'Contacts', companies: 'Companies', deals: 'Deals',
   quotes: 'Quotes', orders: 'Sales orders', accounting: 'Accounting', payments: 'Payments', stock: 'Stock ledger',
   tasks: 'Tasks', notes: 'Notes', invoices: 'Invoices', products: 'Inventory',
-  purchases: 'Purchases', suppliers: 'Suppliers', finance: 'Finance', employees: 'Employees',
+  purchases: 'Purchases', suppliers: 'Suppliers', finance: 'Finance', expenses: 'Expense requests', employees: 'Employees',
   reports: 'Reports', contact: 'Contact us',
 };
 

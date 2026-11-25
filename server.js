@@ -45,7 +45,7 @@ const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const COLLECTION_VIEW = {
   contacts: 'contacts', companies: 'companies', deals: 'deals', tasks: 'tasks', quotes: 'quotes', sales_orders: 'orders', returns: 'orders',
   activities: 'contacts', products: 'products', suppliers: 'suppliers',
-  invoices: 'invoices', purchases: 'purchases', ledger: 'finance', expenses: 'finance', recurring: 'invoices',
+  invoices: 'invoices', purchases: 'purchases', ledger: 'finance', expenses: ['finance', 'expenses'], recurring: 'invoices',
   employees: 'employees', notes: 'notes', accounts: 'accounting', journal: 'accounting', payments: 'payments',
   warehouses: 'stock', stock_moves: 'stock',
 };
@@ -125,7 +125,8 @@ function publicUser(u) {
 function canView(user, view) {
   if (!user) return false;
   if (user.role === 'admin') return true;
-  return (user.modules || []).includes(view);
+  const views = Array.isArray(view) ? view : [view];
+  return views.some(v => (user.modules || []).includes(v));
 }
 
 /* Filter the shared data down to what this user may see. Because the client
@@ -135,6 +136,12 @@ function dataFor(user) {
   const out = { meta: d.meta };
   for (const [coll, view] of Object.entries(COLLECTION_VIEW)) {
     if (canView(user, view)) out[coll] = d[coll];
+  }
+  /* expense requests are row-scoped: a submitter without the finance
+     module only ever receives their own requests — the review scope and the
+     books stay with finance reviewers */
+  if (out.expenses && !canView(user, 'finance')) {
+    out.expenses = out.expenses.filter(e => e.submitted_by === user.username);
   }
   if (user.role === 'admin') {
     out.messages = d.messages;
