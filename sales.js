@@ -710,7 +710,7 @@ function renderPurchases() {
       <td>${s ? esc(s.name) : '—'}</td>
       <td><div>${esc(po.order_date || '—')}</div>${po.received_date ? `<div class="cell-sub">${t('received')} ${esc(po.received_date)}</div>` : ''}</td>
       <td>${money(purchaseTotal(po))}</td>
-      <td><span class="badge ${po.status === 'received' ? 'won' : 'open'}">${t(po.status)}</span>${(po.receipts || []).length && po.status !== 'received' ? `<div class="cell-sub">${t('Partly received')}: ${money((po.receipts || []).reduce((a, r) => a + num(r.amount), 0))} / ${money(purchaseTotal(po))}</div>` : ''}</td>
+      <td><span class="badge ${po.status === 'received' ? 'won' : 'open'}">${t(po.status)}</span>${(po.receipts || []).length && po.status !== 'received' ? `<div class="cell-sub">${t('Partly received (value)')}: ${money((po.receipts || []).reduce((a, r) => a + num(r.amount), 0))} / ${money(purchaseTotal(po))}</div>` : ''}</td>
       <td class="row-actions">
         ${(po.status === 'ordered' && inServerMode() && (po.items || []).length && (po.items || []).every(it => it.product_id != null)) ? `<button class="icon-btn" data-act="receive" data-id="${po.id}" title="${t('Receive goods')}">📥</button>` : ''}
         ${po.status === 'received' ? `<button class="icon-btn" data-act="preturn" data-id="${po.id}" title="${t('Return to supplier')}">↩️</button>` : ''}

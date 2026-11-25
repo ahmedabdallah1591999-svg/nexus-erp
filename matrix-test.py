@@ -290,5 +290,32 @@ ok('RC18 return to supplier works once fully received',tx({'op':'purchase-return
 po3=tx({'op':'purchase-save','out':{'status':'ordered','supplier_id':777,'items':[{'description':'service','qty':1,'cost':50}]}})[1]['purchase']['id']
 ok('RC19 PO with a non-stock line cannot be partly received',tx({'op':'purchase-receive','id':po3,'items':[{'line':0,'qty':1}]})[0]==400)
 d=call('GET','/api/data',tok=tok)[1]['data']; ok('RC20 invariants at end',not invariants(d),invariants(d))
+
+# partial receipts: mixed costs, per-line allocation, no cross-line remainder
+pc=tx({'op':'product-save','out':{'name':'RC','price':9,'cost':3.33,'stock':0}})[1]['product']['id']
+pd=tx({'op':'product-save','out':{'name':'RD','price':99,'cost':7.5,'stock':0}})[1]['product']['id']
+po4=tx({'op':'purchase-save','out':{'status':'ordered','supplier_id':777,'items':[{'product_id':pc,'qty':3,'cost':3.33},{'product_id':pd,'qty':2,'cost':7.5}]}})[1]['purchase']['id']
+amts=[]
+for k in range(3):
+    r=tx({'op':'purchase-receive','id':po4,'client_ref':'mx%d'%k,'items':[{'line':0,'qty':1}]}); amts.append((r[0],[i['amount'] for i in r[1]['receipt']['items']]))
+ok('RM1 line 0 in three 1-unit receipts allocates only its own value (3.33 each)',all(a[0]==200 for a in amts) and [a[1][0] for a in amts]==[3.33,3.33,3.33],amts)
+ok('RM2 line 1 untouched so far: payable is 9.99 only',jsum(po4)==9.99,jsum(po4))
+r=tx({'op':'purchase-receive','id':po4,'client_ref':'mx9','items':[{'line':1,'qty':2}]}); ok('RM3 line 1 posts its own 15.00',r[0]==200 and r[1]['receipt']['items'][0]['amount']==15.0 and jsum(po4)==24.99,r)
+# odd split of one line: 3 units of 3.34 = 10.02 in thirds then remainder stays on that line
+pg=tx({'op':'product-save','out':{'name':'RG','price':9,'cost':3.34,'stock':0}})[1]['product']['id']
+ph=tx({'op':'product-save','out':{'name':'RH','price':9,'cost':1,'stock':0}})[1]['product']['id']
+pq=tx({'op':'purchase-save','out':{'status':'ordered','supplier_id':777,'items':[{'product_id':pg,'qty':7,'cost':3.34},{'product_id':ph,'qty':1,'cost':1}]}})[1]['purchase']['id']
+got=[]
+for k,q in enumerate((3,3,1)):
+    r=tx({'op':'purchase-receive','id':pq,'client_ref':'qq%d'%k,'items':[{'line':0,'qty':q}]}); got.append(r[1]['receipt']['items'][0]['amount'])
+ok('RM4 uneven quantity split of one line sums to its own 23.38 (no remainder to the other line)',abs(sum(got)-23.38)<0.005 and jsum(pq)==23.38,(got,jsum(pq)))
+pe=tx({'op':'product-save','out':{'name':'RE','price':9,'cost':3.3333,'stock':0}})[1]['product']['id']
+pf=tx({'op':'purchase-save','out':{'status':'ordered','supplier_id':777,'items':[{'product_id':pe,'qty':1,'cost':1.004},{'product_id':ph,'qty':1,'cost':1.004}]}})[1]['purchase']['id']
+rr=tx({'op':'purchase-receive','id':pf,'items':[{'line':0,'qty':1}]}); ok('RM5 sub-cent-cost purchase that cannot reconcile is refused with a clear message',rr[0]==400 and 'fraction' in json.dumps(rr[1]),rr)
+d=call('GET','/api/data',tok=tok)[1]['data']; ok('RM6 invariants after mixed-cost receipts',not invariants(d),invariants(d))
+
+rt=tx({'op':'purchase-return-create','purchase_id':po4,'reason':'mixed return','items':[{'line':0,'qty':1},{'line':1,'qty':1}]})
+ok('RM7 partial return of a fully received multi-cost PO values each line at its own cost (3.33 + 7.50)',rt[0]==200 and abs(rt[1]['purchase_return']['total']-10.83)<0.005 if rt[0]==200 and 'purchase_return' in rt[1] else False,rt)
+d=call('GET','/api/data',tok=tok)[1]['data']; ok('RM8 invariants after the partial return',not invariants(d),invariants(d))
 print('matrix-test: PASS=%d FAIL=%d'%(PASS,FAIL))
 srv.terminate()

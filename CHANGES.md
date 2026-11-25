@@ -46,3 +46,4 @@ Not changed / still open: Windows scripts were reviewed but never run on Windows
 - POS shift amounts bounded; a recorded QC failure cannot be flipped to pass; documents editable only in draft.
 - hotfix8: browser-only mode warning banner at entry; Arabic install/upgrade instructions in deploy/README-AR.md.
 - hotfix9: partial purchase receipts (purchase-receive) with UI, locks while partly received, tests RC1-RC20.
+- hotfix10: partial receipts allocate per line (no catch-all remainder); sub-cent purchases refused; status label shows value.

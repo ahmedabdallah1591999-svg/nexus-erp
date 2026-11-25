@@ -688,7 +688,7 @@ const OPS = {
 
   /* Partial receipt: receive part of an ordered purchase. Each receipt moves stock in and posts
      Dr Inventory / Cr Payables for exactly the received quantities at the PO line cost. The last
-     receipt takes the rounding remainder so receipts add up to the PO total; nothing else is
+     receipt of a line takes only that line's own cent remainder (no value moves between lines); nothing else is
      adjusted. Supplier payment and return to supplier stay blocked until the purchase is fully
      received (they only work on a fully received purchase). Product lines only. */
   'purchase-receive': {
@@ -718,12 +718,23 @@ const OPS = {
         need(q <= left + 1e-9, `cannot receive more than ordered: ${left} left on line ${i + 1}`);
         recv.push({ line: i, product_id: Number(it.product_id), qty: q, cost: ctx.num(it.cost) });
       }
+      /* purchases carry no discount or tax lines; each line's value is its own qty x cost rounded to the cent.
+         Receipts allocate each line's OWN value pro rata by quantity, and a line's last receipt takes only
+         that line's own cent remainder, so no value ever moves between lines. If the line values cannot add
+         up to the PO total (sub-cent costs), partial receipt is refused. */
+      const lineVal = po.items.map(it => r2(ctx.num(it.qty) * ctx.num(it.cost)));
+      need(Math.abs(lineVal.reduce((a, v) => a + v, 0) - r2(ctx.purchaseTotal(po))) < 0.005, 'this purchase has costs with fractions of a cent, so its lines cannot be split into receipts exactly; mark it received in one step');
       const complete = po.items.every((it, i) => {
         const r = recv.find(x => x.line === i);
         return Math.abs(ctx.num(it.qty) - ctx.num(it.received_qty) - (r ? r.qty : 0)) < 1e-9;
       });
-      const prior = r2(po.receipts.reduce((a, r) => a + ctx.num(r.amount), 0));
-      const amount = complete ? r2(ctx.purchaseTotal(po) - prior) : r2(recv.reduce((a, r) => a + r.qty * r.cost, 0));
+      for (const r of recv) {
+        const it = po.items[r.line];
+        const prev = r2(po.receipts.reduce((a, rc) => a + ((rc.items || []).filter(x => x.line === r.line).reduce((b, x) => b + (x.amount != null ? ctx.num(x.amount) : r2(x.qty * ctx.num(it.cost))), 0)), 0));
+        const cum = ctx.num(it.received_qty) + r.qty;
+        r.amount = r2((cum >= ctx.num(it.qty) - 1e-9 ? lineVal[r.line] : r2(lineVal[r.line] * cum / ctx.num(it.qty))) - prev);
+      }
+      const amount = r2(recv.reduce((a, r) => a + r.amount, 0));
       need(amount > 0, 'the received value is zero (check the line costs)');
       ctx.ensureCOA();
       ctx.applyStock(recv.map(r => ({ product_id: r.product_id, qty: r.qty })), +1, { reason: 'purchase-receipt', ref_type: 'purchase', ref_id: po.id });
@@ -732,7 +743,7 @@ const OPS = {
       need(je, 'receipt could not be posted');
       S.add('ledger', { date: ctx.todayStr(), type: 'expense', category: 'Purchases', amount, ref_type: 'purchase', ref_id: po.id, memo: `${po.number} receipt ${po.receipts.length + 1}` });
       for (const r of recv) po.items[r.line].received_qty = ctx.num(po.items[r.line].received_qty) + r.qty;
-      const rec = { n: po.receipts.length + 1, date: ctx.todayStr(), by: user.username, items: recv.map(r => ({ line: r.line, qty: r.qty })), amount, journal_id: je.id, client_ref: ref || null };
+      const rec = { n: po.receipts.length + 1, date: ctx.todayStr(), by: user.username, items: recv.map(r => ({ line: r.line, qty: r.qty, amount: r.amount })), amount, journal_id: je.id, client_ref: ref || null };
       po.receipts.push(rec);
       if (complete) {
         po.status = 'received'; po.stock_applied = true; po.journal_received = true; po.ledger_posted = true; po.received_date = ctx.todayStr();
