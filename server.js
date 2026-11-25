@@ -43,7 +43,7 @@ const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 /* Collection -> permission view. A user may read/write a collection only if
    their role grants its view (admins: everything). */
 const COLLECTION_VIEW = {
-  contacts: 'contacts', companies: 'companies', deals: 'deals', tasks: 'tasks', quotes: 'quotes', sales_orders: 'orders', returns: 'orders',
+  contacts: 'contacts', companies: 'companies', deals: 'deals', tasks: 'tasks', quotes: 'quotes', projects: 'projects', timesheets: 'projects', sales_orders: 'orders', returns: 'orders',
   activities: 'contacts', products: 'products', suppliers: 'suppliers',
   invoices: 'invoices', purchases: 'purchases', ledger: 'finance', expenses: ['finance', 'expenses'], recurring: 'invoices',
   employees: 'employees', notes: 'notes', accounts: 'accounting', journal: 'accounting', payments: 'payments',
@@ -58,7 +58,7 @@ function emptyDb() {
     users: [],           // {id, username, salt, hash, role, modules[], mustChange, created_at}
     data: {
       meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1, orderSeq: 1, returnSeq: 1 },
-      companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [],
+      companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [], projects: [], timesheets: [],
       products: [], suppliers: [], invoices: [], purchases: [], sales_orders: [], returns: [], recurring: [],
       ledger: [], expenses: [], employees: [], notes: [], messages: [], accounts: [], journal: [], payments: [],
       warehouses: [], stock_moves: [], settings: {},

@@ -22,7 +22,7 @@ const App = { views: {}, quickAdd: {}, editors: {} };
 const VIEW_LABELS = {
   dashboard: 'Dashboard', contacts: 'Contacts', companies: 'Companies', deals: 'Deals',
   quotes: 'Quotes', orders: 'Sales orders', accounting: 'Accounting', payments: 'Payments', stock: 'Stock ledger',
-  tasks: 'Tasks', notes: 'Notes', invoices: 'Invoices', products: 'Inventory',
+  tasks: 'Tasks', notes: 'Notes', invoices: 'Invoices', products: 'Inventory', projects: 'Projects',
   purchases: 'Purchases', suppliers: 'Suppliers', finance: 'Finance', expenses: 'Expense requests', employees: 'Employees',
   reports: 'Reports', contact: 'Contact us',
 };
@@ -32,7 +32,7 @@ const VIEW_LABELS = {
 function emptyData() {
   return {
     meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1, orderSeq: 1, returnSeq: 1 },
-    companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [],
+    companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [], projects: [], timesheets: [],
     products: [], suppliers: [], invoices: [], purchases: [], sales_orders: [], returns: [], recurring: [],
     ledger: [], expenses: [], employees: [], notes: [], messages: [],
     accounts: [], journal: [], payments: [], warehouses: [], stock_moves: [],

@@ -28,7 +28,7 @@ const MODULE_FILES = ['i18n.js', 'i18n-extra.js', 'core.js', 'seed.js', 'crm.js'
 
 /* Collections only the server may write (never accepted from a client PUT). */
 const SERVER_OWNED = new Set(['accounts', 'journal', 'payments', 'warehouses', 'stock_moves',
-  'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring', 'expenses']);
+  'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring', 'expenses', 'projects', 'timesheets']);
 
 /* ---------------- browser sandbox ---------------- */
 
@@ -294,6 +294,124 @@ const OPS = {
     },
   },
 
+  'project-save': {
+    view: 'projects',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const out = p.out || {};
+      need(String(out.name || '').trim(), 'name required');
+      need(!out.contact_id || S.data.contacts.some(c => c.id === Number(out.contact_id)), 'customer not found');
+      const rate = Math.round(ctx.num(out.hourly_rate) * 100) / 100;
+      need(rate >= 0, 'hourly rate must not be negative');
+      if (p.id || out.id) {
+        const pr = (S.data.projects || []).find(x => x.id === Number(p.id || out.id));
+        need(pr, 'project not found');
+        Object.assign(pr, {
+          name: String(out.name).trim(), contact_id: out.contact_id || null,
+          status: ['active', 'on-hold', 'done'].includes(out.status) ? out.status : pr.status,
+          start_date: out.start_date || pr.start_date, due_date: out.due_date || '',
+          budget_hours: ctx.num(out.budget_hours), hourly_rate: rate,
+          description: String(out.description || ''),
+        });
+        S.save();
+        return { project: pr };
+      }
+      const row = S.add('projects', {
+        name: String(out.name).trim(), contact_id: out.contact_id || null, status: 'active',
+        start_date: out.start_date || ctx.todayStr(), due_date: out.due_date || '',
+        budget_hours: ctx.num(out.budget_hours), hourly_rate: rate,
+        description: String(out.description || ''), created_by: user.username,
+      });
+      S.save();
+      return { project: row };
+    },
+  },
+  'project-delete': {
+    view: 'projects',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const pr = (S.data.projects || []).find(x => x.id === Number(p.id));
+      need(pr, 'project not found');
+      /* a project with logged time is billing history — remove the time
+         first (only possible while unbilled) rather than orphaning rows */
+      need(!(S.data.timesheets || []).some(t => t.project_id === pr.id), 'project has logged time and cannot be deleted');
+      S.data.projects = S.data.projects.filter(x => x.id !== pr.id);
+      S.save();
+      return { deleted: pr.id };
+    },
+  },
+  'timesheet-save': {
+    view: 'projects',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const out = p.out || {};
+      const hours = Math.round(ctx.num(out.hours) * 100) / 100;
+      need(hours > 0, 'hours must be positive');
+      const pr = (S.data.projects || []).find(x => x.id === Number(out.project_id));
+      need(pr, 'project not found');
+      if (p.id || out.id) {
+        const ts = (S.data.timesheets || []).find(x => x.id === Number(p.id || out.id));
+        need(ts, 'timesheet not found');
+        need(!ts.billed_invoice_id, 'billed time cannot be edited');
+        need(user.role === 'admin' || ts.employee === user.username, 'only the logger can edit it');
+        Object.assign(ts, { date: out.date || ts.date, hours, description: String(out.description || ''), billable: !!out.billable });
+        S.save();
+        return { entry: ts };
+      }
+      /* employee identity comes from the session, never the payload */
+      const row = S.add('timesheets', {
+        project_id: pr.id, employee: user.username, date: out.date || ctx.todayStr(),
+        hours, description: String(out.description || ''), billable: !!out.billable,
+        billed_invoice_id: null,
+      });
+      S.save();
+      return { entry: row };
+    },
+  },
+  'timesheet-delete': {
+    view: 'projects',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const ts = (S.data.timesheets || []).find(x => x.id === Number(p.id));
+      need(ts, 'timesheet not found');
+      need(!ts.billed_invoice_id, 'billed time cannot be deleted');
+      need(user.role === 'admin' || ts.employee === user.username, 'only the logger can delete it');
+      S.data.timesheets = S.data.timesheets.filter(x => x.id !== ts.id);
+      S.save();
+      return { deleted: ts.id };
+    },
+  },
+  'timesheet-invoice': {
+    view: 'projects',
+    run(ctx, p, user) {
+      /* billing also needs the invoices module — it creates a real document */
+      need(user.role === 'admin' || (user.modules || []).includes('invoices'), 'invoices access required to bill time');
+      const S = ctx.store;
+      const pr = (S.data.projects || []).find(x => x.id === Number(p.project_id));
+      need(pr, 'project not found');
+      need(pr.contact_id, 'project has no customer to bill');
+      const rate = ctx.num(pr.hourly_rate);
+      need(rate > 0, 'project has no hourly rate');
+      const unbilled = (S.data.timesheets || []).filter(t => t.project_id === pr.id && t.billable && !t.billed_invoice_id);
+      need(unbilled.length > 0, 'no unbilled billable time');
+      /* the invoice is a DRAFT: sending (which posts accounting) stays an
+         explicit, separately-authorized operation */
+      ctx.saveInvoice(null, {
+        status: 'draft', contact_id: pr.contact_id, deal_id: null,
+        issue_date: ctx.todayStr(), due_date: ctx.todayStr(),
+        tax_rate: 0, notes: `${ctx.t('Project')} ${pr.name}`,
+        items: unbilled.map(t => ({
+          product_id: null,
+          description: `${t.date} — ${t.description || ctx.t('Time')} (${t.hours}h × ${rate})`,
+          qty: t.hours, price: rate,
+        })),
+      });
+      const inv = S.data.invoices[S.data.invoices.length - 1];
+      for (const t of unbilled) t.billed_invoice_id = inv.id;
+      S.save();
+      return { invoice: inv, billed: unbilled.length };
+    },
+  },
   'expense-save': {
     view: ['finance', 'expenses'],
     run(ctx, p, user) {
