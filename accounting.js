@@ -206,6 +206,14 @@ function postStockAdjustmentJournal(product, qty, memo) {
 /* Reconciliation proof: the Inventory GL account must equal the stock
    ledger valued at cost, and the equation must still hold. Returns a list
    of violations (empty = reconciled). */
+function inventoryGap() {
+  const invAcc = accountByCode('1200');
+  if (!invAcc) return 0;
+  const gl = accountBalance(invAcc.id);
+  const val = Math.round(store.data.products.reduce((s, p) => s + num(p.stock) * num(p.cost), 0) * 100) / 100;
+  return Math.round((val - gl) * 100) / 100;
+}
+
 function inventoryValuationViolations() {
   const out = [];
   const invAcc = accountByCode('1200');
@@ -214,6 +222,28 @@ function inventoryValuationViolations() {
   const val = Math.round(store.data.products.reduce((s, p) => s + num(p.stock) * num(p.cost), 0) * 100) / 100;
   if (Math.abs(gl - val) > 0.01) out.push(`Inventory GL ${gl} != stock valuation at cost ${val}`);
   return out;
+}
+
+/* Upgrade migration for data created before inventory postings existed
+   (opening stock, COGS, adjustments). We never rewrite or fabricate
+   per-document history: one clearly-labelled alignment entry against
+   equity brings the Inventory account in line with the stock ledger, and
+   every posting from then on is exact. Idempotent — once reconciled, the
+   gap is zero and nothing posts. */
+function migrateInventoryValuation() {
+  ensureCOA();
+  if (typeof ensureStockBaseline === 'function') ensureStockBaseline();
+  const gap = inventoryGap();
+  if (Math.abs(gap) <= 0.01) return null;
+  const invAcc = accountByCode('1200'), eq = accountByCode('3000');
+  const lines = gap > 0
+    ? [{ account_id: invAcc.id, debit: gap }, { account_id: eq.id, credit: gap }]
+    : [{ account_id: eq.id, debit: -gap }, { account_id: invAcc.id, credit: -gap }];
+  return postJournal({
+    date: todayStr(),
+    memo: t('Migration: align inventory valuation with the stock ledger (pre-upgrade data)'),
+    ref_type: 'migration', ref_id: null, lines,
+  });
 }
 
 /* ---------------- UI ---------------- */

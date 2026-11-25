@@ -5,7 +5,20 @@
   await Sync.init();
   if (Sync.mode === 'server' && Sync.serverUser) await Sync.pullData();
 
+  /* snapshot before any upgrade migration mutates the books (kept once) */
+  const preMigrationRaw = localStorage.getItem(DB_KEY);
   store.load();
+  /* single-device preview: the server runs this migration itself in server
+     mode; locally we align pre-upgrade data the same way */
+  if (Sync.mode !== 'server' && typeof migrateInventoryValuation === 'function') {
+    const posted = migrateInventoryValuation();
+    if (posted) {
+      if (preMigrationRaw && !localStorage.getItem(DB_KEY + ':premigration-backup')) {
+        localStorage.setItem(DB_KEY + ':premigration-backup', preMigrationRaw);
+      }
+      store.save();
+    }
+  }
   bindModal();
   bindNav();
   bindSearch();

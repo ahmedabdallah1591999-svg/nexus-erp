@@ -84,7 +84,7 @@ function makeSandbox() {
     accountingInvariants, stockInvariants, accountByCode, invoiceTotal,
     postInvoiceSentJournal, postPurchaseReceivedJournal, postPayrollJournal,
     productWarehouseStock, recordStockMove, postOpeningStockJournal,
-    applyReturnEffects, returnedQty, invoiceOpenAmount,
+    applyReturnEffects, returnedQty, invoiceOpenAmount, inventoryGap,
   })`, sandbox);
   return api;
 }
@@ -523,6 +523,30 @@ const OPS = {
       need(o.status === 'draft', 'only draft orders can be deleted');
       S.remove('sales_orders', o.id);
       return { deleted: o.id };
+    },
+  },
+
+  /* Upgrade migration: one clearly-labelled equity-offset entry aligns the
+     Inventory GL with the stock ledger for data created before inventory
+     postings existed. Idempotent; the invariant gate verifies the result. */
+  'migrate-inventory': {
+    view: 'accounting',
+    run(ctx, p) {
+      ctx.ensureCOA();
+      ctx.ensureStockBaseline();
+      const gap = ctx.inventoryGap();
+      if (Math.abs(gap) <= 0.01) return { posted: false, gap: 0 };
+      const invAcc = ctx.accountByCode('1200'), eq = ctx.accountByCode('3000');
+      const lines = gap > 0
+        ? [{ account_id: invAcc.id, debit: gap }, { account_id: eq.id, credit: gap }]
+        : [{ account_id: eq.id, debit: -gap }, { account_id: invAcc.id, credit: -gap }];
+      const entry = ctx.postJournal({
+        date: ctx.todayStr(),
+        memo: ctx.t('Migration: align inventory valuation with the stock ledger (pre-upgrade data)'),
+        ref_type: 'migration', ref_id: null, lines,
+      });
+      need(entry, 'migration journal failed');
+      return { posted: true, gap };
     },
   },
 

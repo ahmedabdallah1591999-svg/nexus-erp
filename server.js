@@ -36,7 +36,7 @@ function enqueueWrite(fn) {
 
 const PORT = process.env.PORT || 8080;
 const ROOT = __dirname;
-const DATA_DIR = path.join(ROOT, 'data');
+const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
 const DB_FILE = path.join(DATA_DIR, 'store.json');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 
@@ -86,6 +86,27 @@ if (db && db.data) {
   for (const k of Object.keys(fresh.meta || {})) if (db.data.meta[k] === undefined) db.data.meta[k] = fresh.meta[k];
 }
 if (!db || !db.data || !db.users) { db = emptyDb(); saveJson(DB_FILE, db); }
+
+/* Upgrade migration: align the Inventory GL with the stock ledger for data
+   created before inventory postings existed. The pre-migration data file is
+   preserved once, next to the live file, before anything changes. */
+try {
+  const hasBooks = (db.data.products || []).length || (db.data.journal || []).length;
+  if (hasBooks) {
+    const mig = runTx(db, { role: 'admin' }, 'migrate-inventory', {}, () => true);
+    if (mig.ok && mig.result && mig.result.posted) {
+      const backup = DB_FILE + '.premigration-backup';
+      if (!fs.existsSync(backup)) {
+        /* db was mutated in place — rebuild the pre-migration file from the
+           migration entry's inverse is overkill; instead we saved nothing
+           yet, so the on-disk file IS still the pre-migration state */
+        fs.copyFileSync(DB_FILE, backup);
+      }
+      saveJson(DB_FILE, db);
+      console.log(`migration: inventory valuation aligned (gap ${mig.result.gap}), backup at ${backup}`);
+    }
+  }
+} catch (e) { console.error('inventory migration failed (data left unchanged):', e.message); }
 let sessions = loadJson(SESSIONS_FILE, {}); // token -> username
 const loginFails = new Map(); // ip -> {count, first} — simple brute-force brake
 
