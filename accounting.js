@@ -41,7 +41,11 @@ function ensureCOA() {
        opening values explicitly. A pre-upgrade database with any journal
        history takes the admin review path (migrateInventoryValuation) and
        never gets an automatic equity entry. */
-    if (!store.data.journal.length) {
+    /* an empty journal is NOT proof of a fresh setup — real or imported
+       stock can have no journal. Only the explicitly marked synthetic seed
+       fixture gets automatic opening values; everything else takes the
+       admin review path (migrateInventoryValuation), even with no journal. */
+    if (!store.data.journal.length && store.data.settings && store.data.settings.seed_demo) {
       const pv = Math.round(store.data.products.reduce((s, p) => s + num(p.stock) * num(p.cost), 0) * 100) / 100;
       if (pv > 0) {
         postJournal({

@@ -4,6 +4,9 @@
 
 function seedData() {
   const d = emptyData();
+  /* marks this exact fixture as the known synthetic seed — the only case
+     where opening stock values are established automatically */
+  d.settings = { seed_demo: true };
   const add = (coll, row) => { row.id = d.meta.nextId++; d[coll].push(row); return row.id; };
   const today = new Date();
   const iso = offset => { const t = new Date(today); t.setDate(t.getDate() + offset); return t.toISOString().slice(0, 10); };
