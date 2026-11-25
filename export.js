@@ -1,5 +1,5 @@
 'use strict';
-/* export.js — Excel (.xlsx) export with a charts sheet, plus Google Drive upload.
+/* export.js — Excel (.xlsx) export with a charts sheet, scoped to each user's permitted sections.
    The xlsx file is built directly (via JSZip) so charts rendered on a canvas can be
    embedded as images in a dedicated charts sheet — no server involved. */
 
@@ -200,15 +200,15 @@ function buildChartSpecs() {
     byMonth[m] = (byMonth[m] || 0) + invoiceTotal(i);
   });
   const sales = Object.keys(byMonth).sort().map(m => [m, Math.round(byMonth[m] * 100) / 100]);
-  if (sales.length) blocks.push({ title: t('Sales by month (paid invoices)'), entries: sales, color: '4F46E5' });
+  if (sales.length && Auth.can('invoices')) blocks.push({ title: t('Sales by month (paid invoices)'), entries: sales, color: '4F46E5', view: 'invoices' });
 
   const exp = {};
   d.ledger.filter(l => l.type === 'expense').forEach(l => { exp[t(l.category || 'Other')] = (exp[t(l.category || 'Other')] || 0) + num(l.amount); });
   const expRows = Object.entries(exp).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  if (expRows.length) blocks.push({ title: t('Expenses by category'), entries: expRows, color: 'DC2626' });
+  if (expRows.length && Auth.can('finance')) blocks.push({ title: t('Expenses by category'), entries: expRows, color: 'DC2626', view: 'finance' });
 
   const pipe = STAGES.map(s => [t(s), d.deals.filter(x => x.stage === s).reduce((a, x) => a + num(x.value), 0)]);
-  if (pipe.some(p => p[1] > 0)) blocks.push({ title: t('Deal pipeline'), entries: pipe, color: '0891B2' });
+  if (pipe.some(p => p[1] > 0) && Auth.can('deals')) blocks.push({ title: t('Deal pipeline'), entries: pipe, color: '0891B2', view: 'deals' });
 
   const qty = {};
   d.invoices.filter(i => i.status !== 'draft').forEach(i => (i.items || []).forEach(it => {
@@ -216,7 +216,7 @@ function buildChartSpecs() {
     qty[name] = (qty[name] || 0) + num(it.qty);
   }));
   const tops = Object.entries(qty).sort((a, b) => b[1] - a[1]).slice(0, 6);
-  if (tops.length) blocks.push({ title: t('Top products by units sold'), entries: tops, color: '16A34A' });
+  if (tops.length && Auth.can('invoices')) blocks.push({ title: t('Top products by units sold'), entries: tops, color: '16A34A', view: 'invoices' });
 
   /* Lay the blocks out on the ChartData sheet and record the ranges. */
   const dataRows = [[t('Chart data')]];
@@ -248,12 +248,15 @@ function buildChartSpecs() {
 }
 
 async function buildExcelBlob() {
-  const sheets = exportSheets();
+  /* Permission-scoped: every user exports only the sections they can see. */
+  const sheets = exportSheets().filter(sh => !sh.view || Auth.can(sh.view));
   const { dataRows, charts } = buildChartSpecs();
-  sheets.push({ name: 'ChartData', rows: dataRows });
-  const chartsIndex = sheets.length;
-  sheets.push({ name: t('Charts'), rows: [[t('Charts') + ' — ' + t('Editable native Excel charts; edit the ChartData sheet to change values.')]] });
-  charts.forEach(c => { c.sheet = chartsIndex; });
+  if (charts.length) {
+    sheets.push({ name: 'ChartData', rows: dataRows });
+    const chartsIndex = sheets.length;
+    sheets.push({ name: t('Charts'), rows: [[t('Charts') + ' — ' + t('Editable native Excel charts; edit the ChartData sheet to change values.')]] });
+    charts.forEach(c => { c.sheet = chartsIndex; });
+  }
   return buildXlsx(sheets, [], charts);
 }
 
@@ -274,51 +277,59 @@ function exportSheets() {
 
   const sheets = [];
 
+  const summaryRows = [
+    ['contacts', t('Contacts'), d.contacts.length],
+    ['companies', t('Companies'), d.companies.length],
+    ['deals', t('Open pipeline'), openVal],
+    ['deals', t('won'), wonVal],
+    ['invoices', t('Outstanding invoices'), outstanding],
+    ['invoices', t('Revenue (paid invoices)'), revenue],
+    ['finance', t('Income this month'), totals.income],
+    ['finance', t('Expenses this month'), totals.expense],
+    ['finance', t('Net this month'), totals.net],
+    ['products', t('Stock value (at cost)'), d.products.reduce((s, p) => s + num(p.cost) * num(p.stock), 0)],
+    ['deals', t('Win rate') + ' %', (won + lost) ? Math.round((won / (won + lost)) * 100) : 0],
+  ].filter(r => Auth.can(r[0])).map(r => [r[1], r[2]]);
   sheets.push({
     name: t('Summary'),
     rows: [
       ['أحمد عبدالله بيزنس ديفيلوبمنت — ' + t('Summary'), todayStr()],
       [],
-      [t('Contacts'), d.contacts.length],
-      [t('Companies'), d.companies.length],
-      [t('Open pipeline'), openVal],
-      [t('won'), wonVal],
-      [t('Outstanding invoices'), outstanding],
-      [t('Revenue (paid invoices)'), revenue],
-      [t('Income this month'), totals.income],
-      [t('Expenses this month'), totals.expense],
-      [t('Net this month'), totals.net],
-      [t('Stock value (at cost)'), d.products.reduce((s, p) => s + num(p.cost) * num(p.stock), 0)],
-      [t('Win rate') + ' %', (won + lost) ? Math.round((won / (won + lost)) * 100) : 0],
+      ...(summaryRows.length ? summaryRows : [[t('No data available for your permitted sections.')]]),
     ],
   });
 
   sheets.push({
     name: t('Contacts'),
+    view: 'contacts',
     rows: [[t('Name'), t('Company'), t('Email'), t('Phone'), t('Position'), t('Status'), t('Tags'), t('Notes'), t('Date')],
       ...d.contacts.map(c => [contactName(c), comp(c.company_id), c.email || '', c.phone || '', c.position || '', t(c.status || ''), c.tags || '', c.notes || '', (c.created_at || '').slice(0, 10)])],
   });
 
   sheets.push({
     name: t('Companies'),
+    view: 'companies',
     rows: [[t('Company name'), t('Industry'), t('Email'), t('Phone'), t('Website'), t('Address'), t('Notes')],
       ...d.companies.map(c => [c.name || '', c.industry || '', c.email || '', c.phone || '', c.website || '', c.address || '', c.notes || ''])],
   });
 
   sheets.push({
     name: t('Deals'),
+    view: 'deals',
     rows: [[t('Deal title'), t('Value (USD)'), t('Stage'), t('Contact'), t('Company'), t('Expected close'), t('Notes')],
       ...d.deals.map(x => [x.title || '', num(x.value), t(x.stage || ''), cname(x.contact_id), comp(x.company_id), x.expected_close || '', x.notes || ''])],
   });
 
   sheets.push({
     name: t('Tasks'),
+    view: 'tasks',
     rows: [[t('Task'), t('Due date'), t('Priority'), t('Done'), t('Contact'), t('Description')],
       ...d.tasks.map(x => [x.title || '', x.due_date || '', t(x.priority || ''), x.done ? t('Done') : '', cname(x.contact_id), x.description || ''])],
   });
 
   sheets.push({
     name: t('Invoices'),
+    view: 'invoices',
     rows: [[t('Invoice #'), t('Customer'), t('Issue date'), t('Status'), t('Subtotal'), t('Tax'), t('Total')],
       ...d.invoices.map(i => {
         const sub = invoiceSubtotal(i);
@@ -328,36 +339,42 @@ function exportSheets() {
 
   sheets.push({
     name: t('Inventory'),
+    view: 'products',
     rows: [[t('Product name'), t('SKU'), t('Category'), t('Price'), t('Cost'), t('Stock'), t('Reorder level')],
       ...d.products.map(p => [p.name || '', p.sku || '', p.category || '', num(p.price), num(p.cost), num(p.stock), num(p.reorder_level)])],
   });
 
   sheets.push({
     name: t('Suppliers'),
+    view: 'suppliers',
     rows: [[t('Supplier name'), t('Contact person'), t('Email'), t('Phone')],
       ...d.suppliers.map(s => [s.name || '', s.contact_person || '', s.email || '', s.phone || ''])],
   });
 
   sheets.push({
     name: t('Purchases'),
+    view: 'purchases',
     rows: [[t('PO #'), t('Supplier'), t('Order date'), t('Status'), t('Total')],
       ...d.purchases.map(p => [p.number || '', (p.supplier_id && store.supplier(p.supplier_id)) ? store.supplier(p.supplier_id).name : '', p.order_date || '', t(p.status || ''), purchaseTotal(p)])],
   });
 
   sheets.push({
     name: t('Finance'),
+    view: 'finance',
     rows: [[t('Date'), t('Type'), t('Category'), t('Amount'), t('Memo')],
       ...d.ledger.map(l => [l.date || '', t(l.type || ''), t(l.category || 'Other'), num(l.amount), l.memo || ''])],
   });
 
   sheets.push({
     name: t('Employees'),
+    view: 'employees',
     rows: [[t('Full name'), t('Department'), t('Monthly salary (USD)'), t('Hire date'), t('Status')],
       ...d.employees.map(e => [e.name || '', e.department || '', num(e.salary), e.hire_date || '', t(e.status || '')])],
   });
 
   sheets.push({
     name: t('Notes'),
+    view: 'notes',
     rows: [[t('Title'), t('Note'), t('Pinned'), t('Date')],
       ...(d.notes || []).map(n => [n.title || '', n.body || '', n.pinned ? t('Yes') : '', (n.created_at || '').slice(0, 10)])],
   });
@@ -385,89 +402,11 @@ async function exportExcel() {
   }
 }
 
-/* ---------------- Google Drive upload ---------------- */
-
-function loadGis() {
-  return new Promise((res, rej) => {
-    if (window.google && google.accounts && google.accounts.oauth2) return res();
-    const s = document.createElement('script');
-    s.src = 'https://accounts.google.com/gsi/client';
-    s.onload = res;
-    s.onerror = () => rej(new Error('GIS load failed'));
-    document.head.appendChild(s);
-  });
-}
-
-function getDriveToken(clientId) {
-  return new Promise((res, rej) => {
-    const tc = google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: 'https://www.googleapis.com/auth/drive.file',
-      callback: r => { r && r.access_token ? res(r.access_token) : rej(new Error('no token')); },
-      error_callback: e => rej(e),
-    });
-    tc.requestAccessToken();
-  });
-}
-
-async function exportToDrive() {
-  const clientId = (store.data.settings && store.data.settings.driveClientId || '').trim();
-  if (!clientId) { openDriveSettings(); return; }
-  try {
-    toast(t('Preparing Excel file…'));
-    const blob = await buildExcelBlob();
-    await loadGis();
-    const token = await getDriveToken(clientId);
-    const filename = `nexus-erp-${todayStr()}.xlsx`;
-    const boundary = 'nexus' + Date.now();
-    const meta = { name: filename, mimeType: XLSX_MIME };
-    const body = new Blob([
-      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: ${XLSX_MIME}\r\n\r\n`,
-      blob,
-      `\r\n--${boundary}--`,
-    ], { type: `multipart/related; boundary=${boundary}` });
-    const resp = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + token },
-      body,
-    });
-    if (!resp.ok) throw new Error('Drive upload failed: ' + resp.status);
-    toast(t('Uploaded to Google Drive'));
-  } catch (e) {
-    console.error(e);
-    if (e && e.type === 'popup_closed') return;
-    alert(t('Google Drive upload did not complete. Check the Client ID and your Google sign-in.'));
-  }
-}
-
-function openDriveSettings() {
-  if (!Auth.isAdmin()) { alert(t('Only the admin can set up Google Drive.')); return; }
-  const cur = (store.data.settings && store.data.settings.driveClientId) || '';
-  openModal(t('Google Drive setup'), [
-    { key: 'client_id', label: t('Google OAuth Client ID'), value: cur, full: true, placeholder: 'xxxx.apps.googleusercontent.com' },
-  ], out => {
-    store.data.settings = store.data.settings || {};
-    store.data.settings.driveClientId = (out.client_id || '').trim();
-    store.save();
-    toast(t('Settings saved'));
-  });
-}
-
 /* ---------------- Wiring ---------------- */
 
-function bindExcelDrive() {
+function bindExport() {
   const xl = $('#exportExcelBtn');
-  if (xl) xl.onclick = () => {
-    if (!Auth.isAdmin()) { alert(t('Only the admin can export data.')); return; }
-    exportExcel();
-  };
-  const dr = $('#exportDriveBtn');
-  if (dr) dr.onclick = () => {
-    if (!Auth.isAdmin()) { alert(t('Only the admin can export data.')); return; }
-    exportToDrive();
-  };
-  const ds = $('#driveSettingsBtn');
-  if (ds) ds.onclick = openDriveSettings;
+  if (xl) xl.onclick = () => { exportExcel(); };
 }
 
 /* Node test hook */

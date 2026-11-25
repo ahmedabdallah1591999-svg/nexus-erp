@@ -123,6 +123,12 @@ const Auth = {
         if (!username) return;
         if (p1.length < 4) { $('#setupError').textContent = t('Password is too short.'); $('#setupError').classList.remove('hidden'); return; }
         if (p1 !== p2) { $('#setupError').textContent = t('Passwords do not match.'); $('#setupError').classList.remove('hidden'); return; }
+        if (window.Sync && Sync.mode === 'server') {
+          const okSetup = await this.serverSetup(username, p1);
+          if (!okSetup) { $('#setupError').textContent = t('Could not create the account on the server.'); $('#setupError').classList.remove('hidden'); return; }
+          afterLogin();
+          return;
+        }
         const u = { id: 1, username, role: 'admin', modules: GRANTABLE_VIEWS.slice(), mustChange: false, created_at: new Date().toISOString() };
         await this.setPassword(u, p1);
         this.users.push(u);
@@ -190,8 +196,13 @@ const Auth = {
       { key: 'p1', label: t('New password'), type: 'password', required: true },
       { key: 'p2', label: t('Confirm password'), type: 'password', required: true },
     ], async out => {
-      const h = await this.hash(this.current.salt, out.old);
-      if (h !== this.current.hash) { alert(t('Current password is wrong.')); return; }
+      if (window.Sync && Sync.mode === 'server') {
+        const okOld = await this.verifyPassword(this.current.username, out.old);
+        if (!okOld) { alert(t('Current password is wrong.')); return; }
+      } else {
+        const h = await this.hash(this.current.salt, out.old);
+        if (h !== this.current.hash) { alert(t('Current password is wrong.')); return; }
+      }
       if (!out.p1 || out.p1.length < 4) { alert(t('Password is too short.')); return; }
       if (out.p1 !== out.p2) { alert(t('Passwords do not match.')); return; }
       await this.setPassword(this.current, out.p1);
@@ -222,6 +233,25 @@ function editUser(row) {
     const dup = Auth.find(username);
     if (dup && (!row || dup.id !== row.id)) { alert(t('Username already exists.')); return; }
     const modules = Array.isArray(out.modules) ? out.modules : (out.modules ? [out.modules] : []);
+    if (window.Sync && Sync.mode === 'server') {
+      if (row) {
+        const body = { id: row.id, role: out.role, modules };
+        if (out.password) body.newPassword = out.password;
+        const r = await Sync.api('PATCH', '/api/users', body);
+        if (!r.ok) { alert(t('Could not update the user on the server.')); return; }
+        toast(t('User updated'));
+      } else {
+        if (!out.password || out.password.length < 4) { alert(t('Password is too short.')); return; }
+        const r = await Sync.api('POST', '/api/users', { username, password: out.password, role: out.role, modules });
+        if (r.status === 409) { alert(t('Username already exists.')); return; }
+        if (!r.ok) { alert(t('Could not create the user on the server.')); return; }
+        toast(t('User added'));
+      }
+      const list = await Sync.api('GET', '/api/users');
+      if (list.ok) Auth.users = list.data.users;
+      render();
+      return;
+    }
     if (row) {
       const patch = { username, role: out.role, modules };
       if (out.password) { await Auth.setPassword(row, out.password); }
@@ -241,6 +271,16 @@ function editUser(row) {
 }
 
 function renderUsers() {
+  if (window.Sync && Sync.mode === 'server' && !Auth.users.length && !renderUsers._loading) {
+    renderUsers._loading = true;
+    $('#view-users').innerHTML = `<div class="panel"><div class="cell-sub">${t('Loading…')}</div></div>`;
+    Sync.api('GET', '/api/users').then(r => {
+      renderUsers._loading = false;
+      if (r.ok) Auth.users = r.data.users;
+      renderUsers();
+    });
+    return;
+  }
   const rows = Auth.users.map(u => `
     <tr>
       <td><strong>${esc(u.username)}</strong></td>
@@ -263,7 +303,7 @@ function renderUsers() {
         <tbody>${rows}</tbody>
       </table>
     </div>
-    <div class="panel"><div class="cell-sub">${t('Access is controlled inside the app on this device. For real multi-user security the system needs a server database.')}</div></div>
+    <div class="panel"><div class="cell-sub">${(window.Sync && Sync.mode === 'server') ? t('Accounts and section access are enforced by the local server: each person only receives the sections their role allows.') : t('Access is controlled inside the app on this device. For real multi-user security run the local server (server.js) — see BACKEND.md.')}</div></div>
   `;
 
   $('#addUser').onclick = () => editUser(null);
@@ -276,7 +316,16 @@ function renderUsers() {
     if (btn.dataset.act === 'del') {
       if (Auth.current && Auth.current.id === id) { alert(t('You cannot delete your own account.')); return; }
       if (row.role === 'admin' && Auth.users.filter(x => x.role === 'admin').length === 1) { alert(t('At least one admin must remain.')); return; }
-      confirmDelete(`${t('user')} "${row.username}"`, () => {
+      confirmDelete(`${t('user')} "${row.username}"`, async () => {
+        if (window.Sync && Sync.mode === 'server') {
+          const r = await Sync.api('DELETE', '/api/users', { id });
+          if (!r.ok) { alert(t('Could not delete the user on the server.')); return; }
+          const list = await Sync.api('GET', '/api/users');
+          if (list.ok) Auth.users = list.data.users;
+          render();
+          toast(t('User deleted'));
+          return;
+        }
         Auth.users = Auth.users.filter(x => x.id !== id);
         Auth.persist();
         toast(t('User deleted'));

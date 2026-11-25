@@ -68,11 +68,20 @@ function renderContact() {
       </form>
     </div>`;
 
-  $('#contactForm').addEventListener('submit', e => {
+  $('#contactForm').addEventListener('submit', async e => {
     e.preventDefault();
     if (!e.target.reportValidity()) return;
     const out = {};
     new FormData(e.target).forEach((v, k) => { out[k] = String(v).trim(); });
+    if (window.Sync && Sync.mode === 'server') {
+      /* Server mode: the message goes straight to the server's inbox, so the
+         admin reads it on ANY device — not only in this browser. */
+      const r = await Sync.sendMessage(out.name, out.subject, out.body);
+      if (!r.ok) { alert(t('Could not send the message to the server.')); return; }
+      toast(t('Message sent to the admin'));
+      renderContact();
+      return;
+    }
     out.read = 0;
     store.add('messages', out);
     toast(t('Message sent to the admin'));

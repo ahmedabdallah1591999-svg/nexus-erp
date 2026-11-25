@@ -1,93 +1,80 @@
-# Backend plan — real accounts, shared data, real security
-# خطة الخادم — حسابات حقيقية وبيانات مشتركة وحماية فعلية
+# Backend — Local Server (نظام أحمد عبدالله بيزنس ديفيلوبمنت)
 
-## What this adds (الذي سيضاف)
+The owner decided: **no paid services, no cloud accounts, no Google Drive
+connection.** Exports download directly to the device each person works on.
+So the backend is a small server that runs on **one machine in the office** —
+free, no subscriptions, no accounts anywhere.
 
-Today the ERP runs fully in the browser: fast and free, but the sign-in gate
-lives on each device and every browser keeps its own copy of the data.
+## What the local server gives you
 
-This plan moves accounts and data to a managed backend (**Supabase**) so that:
+| | Browser-only (GitHub Pages) | With `server.js` |
+|---|---|---|
+| Accounts | Stored in each browser | Stored on the server, scrypt-hashed |
+| Data | Each device has its own copy | One shared database for the whole team |
+| Permissions | Hiding in the app | **Enforced by the server**: each person only *receives* the sections their role allows |
+| Excel export | Everything in that browser | Only the sections that person may see — by design |
+| Contact-us messages | Stay in the sender's browser | Reach the admin's inbox on **any** device |
 
-- كل موظف يدخل بحسابه من أي جهاز، والبيانات واحدة ومشتركة لحظيًا.
-- الصلاحيات تتفرض من قاعدة البيانات نفسها (Row Level Security)، مش من الواجهة —
-  حتى لو حد فتح أدوات المطور مش هيقدر يقرأ أو يعدّل قسم مش مسموح له.
-- رسائل «تواصل معنا» توصل لمدير النظام على أي جهاز، مش بس نفس المتصفح.
-- نسخ احتياطي تلقائي من المنصة بدل ما البيانات تضيع مع مسح المتصفح.
+## Requirements
 
-## Architecture
+1. One computer that stays on during work hours (the admin's own PC works).
+2. Node.js 18 or newer — free from <https://nodejs.org>. No npm install, no
+   packages, no internet needed after that.
+3. All devices on the same office network (Wi-Fi/LAN).
 
-```
-Browser (this same app, on GitHub Pages — stays free)
-   │  supabase-js (auth + data, over HTTPS)
-   ▼
-Supabase project (one project is enough)
-   ├── Auth        email+password accounts (admin invites employees)
-   ├── Postgres    the 14 tables in schema.sql
-   └── RLS         per-section access enforced in the database itself
-```
+## Run
 
-- The front end barely changes: the localStorage `store` becomes a
-  Supabase-backed store with an offline cache, so the app keeps working
-  with poor connectivity and syncs when back.
-- `schema.sql` in this repo is ready to run: tables, permission helpers
-  (`is_admin`, `has_section`), and a policy per section. `messages` allows
-  any signed-in user to insert but only the admin to read/update/delete.
-- Employee accounts are created by the admin from inside the app through a
-  small Supabase Edge Function (`create-user`, holds the service key
-  server-side; the browser never sees it). Sketch included below.
-- Audit: every row carries `created_by` + timestamps.
-
-## Cost (verified today on supabase.com)
-
-| Item | Free plan | When paid |
-| --- | --- | --- |
-| Price | $0 | Pro $25/month only if we outgrow free |
-| Database | 500 MB | plenty for this ERP (thousands of rows ≈ a few MB) |
-| Projects | 2 active | we need 1 |
-| API requests | unlimited | — |
-| Pausing | project pauses after 7 days of no activity; one click restores it | Pro removes pausing |
-| Sources | supabase.com/pricing, supabase.com/docs/guides/platform/free-project-pausing | |
-
-Google Drive export stays client-side and free; it needs a one-time OAuth
-client setup in Google Cloud (see README).
-
-## Deployment steps (30–45 minutes, one time)
-
-1. Create the Supabase account — **owner decision: Ahmed's email**. Sign-in
-   with GitHub or Google works; the project belongs to his account.
-2. New project → region closest to Egypt (e.g. Central EU) → free plan.
-3. SQL editor → run `schema.sql` (creates tables + policies).
-4. Authentication → enable email provider; the first admin signs up from the
-   app, then gets promoted to `admin` once in the `profiles` table.
-5. Add the project URL + anon key to the app (Settings → backend). The anon
-   key is safe to expose: RLS is what enforces access.
-6. Deploy the `create-user` edge function for admin-managed employee accounts.
-7. Migrate existing browser data with the app's JSON export → import script.
-
-## Edge function sketch (create-user)
-
-```ts
-// supabase/functions/create-user/index.ts — runs server-side, holds service key
-import { createClient } from 'jsr:@supabase/supabase-js@2';
-Deno.serve(async (req) => {
-  const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-  const caller = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!,
-    { global: { headers: { Authorization: req.headers.get('Authorization')! } } });
-  const { data: me } = await caller.auth.getUser();
-  const { data: prof } = await admin.from('profiles').select('role').eq('id', me.user?.id).single();
-  if (prof?.role !== 'admin') return new Response('forbidden', { status: 403 });
-  const { email, password, username, role, sections } = await req.json();
-  const { data: u, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
-  if (error) return new Response(error.message, { status: 400 });
-  await admin.from('profiles').insert({ id: u.user.id, username, role });
-  await admin.from('section_access').insert((sections || []).map((s: string) => ({ user_id: u.user.id, section: s })));
-  return Response.json({ id: u.user.id });
-});
+```bash
+node server.js
 ```
 
-## Decisions needed from the owner (قرارات مطلوبة)
+Then:
 
-1. **الموافقة على إنشاء حساب Supabase بإيميله** (مجاني) — الحساب هيكون ملكه.
-2. **الموافقة على إعداد Google OAuth Client** في حساب Google الخاص به عشان
-   يتفعّل زرار التصدير إلى Drive (مجاني برضه).
-3. بعد ما الخادم يشتغل: نقل البيانات الحالية من المتصفح للنسخة المشتركة.
+- On that machine: open <http://localhost:8080>
+- On every other device: open `http://<that-machine's-IP>:8080`
+  (the server prints the address form when it starts)
+
+First run: create the admin account from the setup screen. Then the admin
+creates employee accounts from the 🔑 Users screen and picks each person's
+allowed sections. Passwords are set by the admin and changed by each user on
+first login; the server stores only salted scrypt hashes.
+
+## How it works
+
+- `server.js` serves the app itself **and** a small JSON API, so there is no
+  HTTPS/certificate setup and nothing extra to host.
+- Data lives in `data/store.json` next to `server.js` (atomic writes).
+  Sessions in `data/sessions.json`. Neither folder is served over HTTP.
+- The front end (`sync.js`) auto-detects the server: served by `server.js` →
+  shared mode; opened from GitHub Pages → original single-device mode, nothing
+  changes.
+- The server filters every read and every write by the user's sections, so a
+  restricted employee's browser never holds finance/employee data — and their
+  Excel export can't contain it.
+- Contact-us messages go straight to the server inbox (`POST /api/messages`);
+  only the admin reads them.
+
+## API summary
+
+`GET /api/ping` · `POST /api/setup` (first admin only) · `POST /api/login` ·
+`POST /api/logout` · `GET /api/me` · `GET /api/data` (permission-filtered) ·
+`PUT /api/data` (per-section enforcement) · `POST /api/messages` (any user) ·
+`GET|POST|PATCH|DELETE /api/users` (admin)
+
+## Honest limits
+
+- **Backups are your job**: copy `data/store.json` somewhere safe regularly
+  (a USB stick or another computer). One file, once a day, is enough.
+- **One server = one database**: if that machine is off, the team works
+  offline and their changes sync when it is back (last write wins per record).
+- **Office network only**: the server is HTTP without TLS, fine inside a
+  trusted office LAN. Do not expose it to the internet as-is.
+- Two people editing the *same record at the same moment*: the later save
+  wins. Different records never conflict.
+- The old Supabase plan (`schema.sql`) stays in the repo only as a reference;
+  it was **not** chosen (no cloud accounts per the owner's decision).
+
+## Cost
+
+Node.js: free. Hosting: the office machine you already have. Total: **$0**,
+no payment method anywhere.

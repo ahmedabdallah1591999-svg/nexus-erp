@@ -60,6 +60,7 @@ const store = {
       console.error('Save failed:', e);
       if (typeof toast === 'function') toast(t('Could not save data. Browser storage is full.'));
     }
+    if (window.Sync && Sync.mode === 'server') Sync.push();
   },
   // Adopt an imported data object: normalize missing collections, then persist.
   adopt(data) {

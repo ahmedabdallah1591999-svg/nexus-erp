@@ -26,8 +26,8 @@ No backend, no build step — open it and work. Data is stored in the browser.
 | **Reports** | Sales by month, deal pipeline, top products by units sold, expenses by category, win rate, stock value |
 | **Contact us** | A written message form — messages land in the admin's **Inbox** — جديد |
 | **Users & access** | Username/password sign-in with per-section permissions per employee — جديد |
-| **Excel export** | Every module exported to one `.xlsx` file, with a summary sheet and a charts sheet (embedded chart images) — جديد |
-| **Google Drive export** | Send the same Excel file straight to Google Drive (one-time setup, see below) — جديد |
+| **Excel export** | Every permitted section exported to one `.xlsx` file, with a summary sheet and native editable charts — جديد |
+| **Local server (shared mode)** | Optional `server.js`: real accounts, one shared database, server-enforced permissions — جديد |
 
 ## Sign-in & access control — جديد
 
@@ -37,35 +37,26 @@ No backend, no build step — open it and work. Data is stored in the browser.
   each employee can open, and reset passwords.
 - Employees see only their allowed sections; the sidebar, search and direct links
   all respect the permissions.
-- Export (Excel / Drive / JSON) and import are admin-only.
+- **📊 Export to Excel** is available to every signed-in user and contains
+  **only the sections that person is allowed to see**. JSON backup/restore stays
+  admin-only.
 - Messages sent through **Contact us** are readable only by the admin (📥 Inbox).
 
-**Honest scope:** this access control runs inside the browser on each device.
-It keeps casual users out of sections they should not see, but the data file is
-still local — it is not server-side security. Real multi-user security needs a
-server database.
+**Two ways to run:** opened from GitHub Pages, the app works on one device at a
+time and the access gate runs inside the browser. Run the included
+**local server** (`node server.js` — see [BACKEND.md](BACKEND.md)) and accounts,
+shared data and per-section permissions are enforced by the server itself:
+each person only receives the sections their role allows, and Contact-us
+messages reach the admin on any device. No cloud account, no cost.
 
 ## Excel export with charts — جديد
 
-**📊 Export to Excel** downloads one workbook containing every module as a sheet,
+**📊 Export to Excel** downloads one workbook containing every section you are allowed to see as a sheet,
 a **Summary** sheet with the key numbers, a **ChartData** sheet, and a **Charts**
 sheet with native, editable Excel charts (sales by month, expenses by category,
 pipeline, top products) bound to the ChartData ranges — edit values or restyle
 them like any chart you made in Excel yourself. The file is built entirely in
 the browser (via JSZip, vendored in `vendor/`) — no server, nothing uploaded.
-
-## Google Drive export — one-time setup
-
-The app needs a Google OAuth **Client ID** to upload to Drive:
-
-1. In [Google Cloud Console](https://console.cloud.google.com/), create a project,
-   enable the **Google Drive API**.
-2. Create an **OAuth client ID** (type: Web application) and add
-   `https://ahmedabdallah1591999-svg.github.io` as an authorized JavaScript origin.
-3. Copy the client ID (`….apps.googleusercontent.com`).
-4. In the app, sign in as admin → **☁️ Export to Google Drive** → paste the
-   client ID once. After that, the button uploads the Excel file to your Drive
-   (you pick the Google account in Google's own popup; scope: `drive.file`).
 
 ## Languages
 
@@ -108,7 +99,9 @@ finance.js        Ledger, employees/payroll, reports
 dashboard.js      Overview
 auth.js           Sign-in, accounts, per-section permissions
 extras.js         Notes, Contact us, admin Inbox
-export.js         Excel (.xlsx) builder with embedded charts + Google Drive upload
+export.js         Excel (.xlsx) builder with native editable charts, scoped per user
+sync.js           Local-server adapter (shared accounts/data when server.js runs)
+server.js         The local server: auth, shared JSON DB, per-section enforcement
 vendor/jszip.min.js  JSZip (MIT) — the only vendored library, used for .xlsx
 serve.js          Optional local server
 boot.js           Startup
