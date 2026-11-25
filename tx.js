@@ -117,7 +117,7 @@ const num0 = v => Number(v) || 0;
 function confirmedRefund(ctx, p, excess, who, side) {
   const methods = ctx.PAYMENT_METHODS;
   const owed = side === 'customer'
-    ? `This is ${excess.toFixed(2)} more than the customer still owes (they already paid it). A refund is recorded only after the money has actually been sent back: confirm it was sent, choose how (${methods.join(', ')}) and enter its reference. Otherwise lower the quantity to the unpaid part. Store credit / credit balances are not supported yet.`
+    ? `This is ${excess.toFixed(2)} more than the customer still owes (they already paid it). A refund is recorded only after the money has actually been sent back: confirm it was sent, choose how (${methods.join(', ')}) and enter its reference. Otherwise lower the quantity to the unpaid part. To keep it as a customer credit instead (no cash moves), send store_credit: true.`
     : `This is ${excess.toFixed(2)} more than we still owe the supplier (we already paid it). A refund is recorded only after the supplier has actually paid it back: confirm it was received, choose how (${methods.join(', ')}) and enter its reference. Otherwise lower the quantity to the unpaid part, or record the return after the refund arrives. Supplier credit balances are not supported yet.`;
   need(p.refund_confirmed === true && methods.includes(p.refund_method) && String(p.refund_reference || '').trim().length >= 2, owed);
   return { method: p.refund_method, reference: String(p.refund_reference).trim(), by: (who && who.username) || null };
@@ -297,7 +297,8 @@ const OPS = {
     run(ctx, p) {
       need(['in', 'out'].includes(p.direction), 'bad direction');
       need(Number(p.amount) > 0, 'amount must be positive');
-      const row = ctx.recordPayment(p);
+      need(p.method !== 'store_credit', 'customer credit is applied with the credit-apply action');
+      const row = ctx.recordPayment({ direction: p.direction, contact_id: p.contact_id, supplier_id: p.supplier_id, ref_type: p.ref_type, ref_id: p.ref_id, amount: p.amount, method: p.method, date: p.date, memo: p.memo });
       need(row, 'payment rejected: check reference, status and open balance');
       return { payment: row };
     },
@@ -1295,16 +1296,21 @@ const OPS = {
       const toAR = Math.min(total, open);
       const excess = r2(total - toAR);
       let method = null, refundRef = null, refundBy = null;
-      if (excess > 0.005) { const c = confirmedRefund(ctx, p, excess, user, 'customer'); method = c.method; refundRef = c.reference; refundBy = c.by; }
+      /* an explicit choice: keep the part the customer already paid as a credit balance (a liability to
+         them) instead of refunding cash. No cash or bank moves. It can only be used against this
+         customer's own open invoices (credit-apply). */
+      const asCredit = excess > 0.005 && p.store_credit === true;
+      if (asCredit) need(inv.contact_id != null && S.data.contacts.some(c => c.id === inv.contact_id), 'a customer credit needs the invoice to belong to a customer');
+      if (excess > 0.005 && !asCredit) { const c = confirmedRefund(ctx, p, excess, user, 'customer'); method = c.method; refundRef = c.reference; refundBy = c.by; }
       ctx.ensureCOA();
       const date = ctx.todayStr();
       const number = `CN-${String(S.data.meta.cnSeq++).padStart(4, '0')}`;
       const cn = S.add('credit_notes', { number, invoice_id: inv.id, invoice_number: inv.number, contact_id: inv.contact_id || null, date, reason: String(p.reason).trim(),
-        items, subtotal: sub, tax, total, applied_to_receivable: toAR, refunded: excess, refund_method: method, refund_reference: refundRef, refund_confirmed_by: refundBy, status: 'posted', client_ref: p.client_ref ? String(p.client_ref) : null });
+        items, subtotal: sub, tax, total, applied_to_receivable: toAR, refunded: asCredit ? 0 : excess, store_credit: asCredit ? excess : 0, refund_method: method, refund_reference: refundRef, refund_confirmed_by: refundBy, status: 'posted', client_ref: p.client_ref ? String(p.client_ref) : null });
       const lines = [{ account_id: ctx.accountByCode('4000').id, debit: sub }];
       if (tax > 0) lines.push({ account_id: ctx.accountByCode('2100').id, debit: tax });
       if (toAR > 0.005) lines.push({ account_id: ctx.accountByCode('1100').id, credit: toAR });
-      if (excess > 0.005) lines.push({ account_id: ctx.settlementAccountId(method), credit: excess });
+      if (excess > 0.005) lines.push({ account_id: asCredit ? ctx.accountByCode('2150').id : ctx.settlementAccountId(method), credit: excess });
       need(ctx.postJournal({ date, memo: `Credit note ${number} (${inv.number})`, ref_type: 'credit_note', ref_id: cn.id, lines }), 'credit note could not be posted');
       const back = items.filter(it => it.restock);
       if (back.length) {
@@ -1313,7 +1319,8 @@ const OPS = {
         if (cogs > 0) need(ctx.postJournal({ date, memo: `COGS reversal for ${number}`, ref_type: 'credit_note-cogs', ref_id: cn.id,
           lines: [{ account_id: ctx.accountByCode('1200').id, debit: cogs }, { account_id: ctx.accountByCode('5000').id, credit: cogs }] }), 'cost reversal could not be posted');
       }
-      if (excess > 0.005) S.add('ledger', { date, type: 'expense', category: 'Sales return', amount: excess, ref_type: 'credit_note', ref_id: cn.id, memo: `Refund for ${number}` });
+      if (excess > 0.005 && !asCredit) S.add('ledger', { date, type: 'expense', category: 'Sales return', amount: excess, ref_type: 'credit_note', ref_id: cn.id, memo: `Refund for ${number}` });
+      if (asCredit) { S.data.customer_credits = S.data.customer_credits || []; S.add('customer_credits', { contact_id: inv.contact_id, credit_note_id: cn.id, number: `CC-${String(cn.id).padStart(4, '0')}`, date, amount: excess, remaining: excess, status: 'open', applications: [] }); }
       inv.credited_amount = r2(ctx.num(inv.credited_amount) + total);
       S.save();
       return { credit_note: cn };
@@ -1335,6 +1342,8 @@ const OPS = {
       need(cn.status === 'posted', 'this credit note is not active (already void)');
       need(String(p.reason || '').trim().length >= 5, 'a void reason of at least 5 characters is required');
       need(ctx.num(cn.refunded) < 0.005, 'this credit note included a confirmed refund of money; voiding it would need that money recorded as returned, which is not supported yet');
+      const cc = (S.data.customer_credits || []).find(x => x.credit_note_id === cn.id);
+      if (cc) need(cc.status === 'open' && Math.abs(ctx.num(cc.remaining) - ctx.num(cc.amount)) < 0.005 && !(cc.applications || []).length, 'the customer credit from this note has already been used; it cannot be voided');
       const inv = S.data.invoices.find(i => i.id === cn.invoice_id);
       need(inv && ['sent', 'paid'].includes(inv.status) && inv.journal_sent, 'the invoice is no longer in a state that can take this credit note back');
       const back = (cn.items || []).filter(it => it.restock && it.product_id != null);
@@ -1356,6 +1365,7 @@ const OPS = {
         ctx.applyStock(back.map(it => ({ product_id: it.product_id, qty: it.qty })), -1, { reason: 'credit-note-void', ref_type: 'credit_note', ref_id: cn.id });
       }
       inv.credited_amount = Math.max(0, r2(ctx.num(inv.credited_amount) - ctx.num(cn.total)));
+      if (cc) Object.assign(cc, { status: 'void', remaining: 0 });
       Object.assign(cn, { status: 'void', void_reason: String(p.reason).trim(), voided_by: user.username, voided_at: new Date().toISOString() });
       S.save();
       return { credit_note: cn };
@@ -1384,6 +1394,33 @@ const OPS = {
       Object.assign(pr, { status: 'void', void_reason: String(p.reason).trim(), voided_by: user.username, voided_at: new Date().toISOString() });
       S.save();
       return { purchase_return: pr };
+    },
+  },
+
+  /* Use a customer credit against one of the SAME customer's open invoices. Posts Dr Customer Credits /
+     Cr Receivables through the normal payment path, so the invoice's paid amount and status stay consistent.
+     No cash or bank moves. Reviewed action: an explicit credit, invoice and amount, nothing automatic. */
+  'credit-apply': {
+    view: 'invoices',
+    run(ctx, p, user) {
+      const S = ctx.store, r2 = v => Math.round(v * 100) / 100;
+      const cc = (S.data.customer_credits || []).find(x => x.id === Number(p.credit_id));
+      need(cc && cc.status === 'open', 'customer credit not found or not open');
+      const inv = S.data.invoices.find(i => i.id === Number(p.invoice_id));
+      need(inv && ['sent', 'paid'].includes(inv.status) && inv.journal_sent, 'choose a posted invoice');
+      need(inv.contact_id != null && inv.contact_id === cc.contact_id, 'a customer credit can only be used on the same customer\'s invoice');
+      const amount = r2(Number(p.amount));
+      need(Number.isFinite(amount) && amount > 0, 'amount must be positive');
+      need(amount <= ctx.num(cc.remaining) + 0.005, 'amount is more than the credit that is left');
+      need(amount <= ctx.invoiceOpenAmount(inv) + 0.005, 'amount is more than the invoice still owes');
+      ctx.ensureCOA();
+      const row = ctx.recordPayment({ direction: 'in', ref_type: 'invoice', ref_id: inv.id, amount, method: 'store_credit', date: ctx.todayStr(), memo: `Customer credit ${cc.number} applied to ${inv.number}` }, 'credit-apply');
+      need(row, 'could not apply the credit');
+      cc.remaining = r2(ctx.num(cc.remaining) - amount);
+      cc.applications = (cc.applications || []).concat([{ invoice_id: inv.id, amount, date: ctx.todayStr(), by: user.username, payment_id: row.id }]);
+      if (cc.remaining < 0.005) { cc.remaining = 0; cc.status = 'used'; }
+      S.save();
+      return { customer_credit: cc, payment: row };
     },
   },
 

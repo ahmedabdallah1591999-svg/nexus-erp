@@ -15,6 +15,7 @@ const DEFAULT_COA = [
   { code: '1200', name: 'Inventory', type: 'asset' },
   { code: '2000', name: 'Accounts Payable', type: 'liability' },
   { code: '2100', name: 'VAT Payable', type: 'liability' },
+  { code: '2150', name: 'Customer Credits', type: 'liability' },
   { code: '3000', name: "Owner's Equity", type: 'equity' },
   { code: '4000', name: 'Sales Revenue', type: 'revenue' },
   { code: '4100', name: 'Other Income', type: 'revenue' },

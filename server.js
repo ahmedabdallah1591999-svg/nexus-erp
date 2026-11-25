@@ -62,7 +62,7 @@ const COLLECTION_VIEW = {
   contacts: 'contacts', companies: 'companies', deals: 'deals', tasks: 'tasks', quotes: 'quotes', projects: 'projects', timesheets: 'projects', sales_orders: 'orders', returns: 'orders',
   tickets: 'helpdesk', ticket_replies: 'helpdesk',
   leave_requests: ['employees', 'hr-self'], attendance: ['employees', 'hr-self'],
-  assets: 'assets', quality_checks: 'quality', documents: 'quality', credit_notes: 'invoices', purchase_returns: 'purchases',
+  assets: 'assets', quality_checks: 'quality', documents: 'quality', credit_notes: 'invoices', customer_credits: 'invoices', purchase_returns: 'purchases',
   pos_shifts: 'pos', production: 'manufacturing',
   activities: 'contacts', products: 'products', suppliers: 'suppliers',
   invoices: 'invoices', purchases: 'purchases', ledger: 'finance', expenses: ['finance', 'expenses'], recurring: 'invoices',
@@ -82,7 +82,7 @@ function emptyDb() {
       leave_requests: [], attendance: [], assets: [], pos_shifts: [], production: [],
       products: [], suppliers: [], invoices: [], purchases: [], sales_orders: [], returns: [], recurring: [],
       ledger: [], expenses: [], employees: [], notes: [], messages: [], accounts: [], journal: [], payments: [],
-      warehouses: [], stock_moves: [], quality_checks: [], documents: [], credit_notes: [], purchase_returns: [], settings: {},
+      warehouses: [], stock_moves: [], quality_checks: [], documents: [], credit_notes: [], customer_credits: [], purchase_returns: [], settings: {},
     },
   };
 }

@@ -713,7 +713,7 @@ function renderPurchases() {
       <td><span class="badge ${po.status === 'received' ? 'won' : 'open'}">${t(po.status)}</span>${(po.receipts || []).some(r => !r.void) && po.status !== 'received' ? `<div class="cell-sub">${t('Partly received (value)')}: ${money((po.receipts || []).filter(r => !r.void).reduce((a, r) => a + num(r.amount), 0))} / ${money(purchaseTotal(po))}</div>` : ''}</td>
       <td class="row-actions">
         ${(po.status === 'ordered' && inServerMode() && (po.items || []).length && (po.items || []).every(it => it.product_id != null)) ? `<button class="icon-btn" data-act="receive" data-id="${po.id}" title="${t('Receive goods')}">📥</button>` : ''}
-        ${(po.status === 'ordered' && inServerMode() && Auth.current && Auth.current.role === 'admin' && (po.receipts || []).some(r => !r.void)) ? `<button class="icon-btn" data-act="voidreceipt" data-id="${po.id}" title="${t('Void last receipt')}">↩</button>` : ''}
+        ${(po.status === 'ordered' && inServerMode() && Auth.current && Auth.current.role === 'admin' && (po.receipts || []).some(r => !r.void)) ? `<button class="icon-btn" data-act="voidreceipt" data-id="${po.id}" title="${t('Void last receipt')}">↶</button>` : ''}
         ${po.status === 'received' ? `<button class="icon-btn" data-act="preturn" data-id="${po.id}" title="${t('Return to supplier')}">↩️</button>` : ''}
         <button class="icon-btn" data-act="edit" data-id="${po.id}" title="${t('Edit')}">✏️</button>
         <button class="danger-btn" data-act="del" data-id="${po.id}" title="${t('Delete')}">🗑</button>

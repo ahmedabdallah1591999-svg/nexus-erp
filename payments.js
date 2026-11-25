@@ -36,6 +36,7 @@ function purchaseOpenAmount(po) {
    direction 'in': money from a customer against an invoice.
    direction 'out': money to a supplier against a purchase. */
 function settlementAccountId(method) {
+  if (method === 'store_credit') return accountByCode('2150').id;   // only reachable through credit-apply
   /* cash settles into the till (1000); bank, transfer and card settle into
      the bank account (1010) — mixing them would break cash reconciliation.
      Anything missing or unknown keeps the historical cash account: legacy
@@ -43,10 +44,10 @@ function settlementAccountId(method) {
   return accountByCode(['bank', 'transfer', 'card'].includes(method) ? '1010' : '1000').id;
 }
 
-function recordPayment({ direction, contact_id, supplier_id, ref_type, ref_id, amount, method, date, memo }) {
+function recordPayment({ direction, contact_id, supplier_id, ref_type, ref_id, amount, method, date, memo }, internal) {
   /* an explicit method must be a known one — a typo must not quietly pick
      a settlement account; a missing method is legacy data and stays cash */
-  if (method != null && method !== '' && !PAYMENT_METHODS.includes(method)) return null;
+  if (method != null && method !== '' && !PAYMENT_METHODS.includes(method) && !(internal === 'credit-apply' && method === 'store_credit')) return null;
   method = method || 'cash';
   amount = Math.round(num(amount) * 100) / 100;
   if (!(amount > 0)) return null;

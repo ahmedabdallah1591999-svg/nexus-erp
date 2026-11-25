@@ -52,3 +52,7 @@ Not changed / still open: Windows scripts were reviewed but never run on Windows
 - credit-note-void and purchase-return-void (admin only, reason >=5 chars). Original stays with status void/who/when/why; its journal is reversed line by line at original amounts; restocked goods are taken back only if still on hand; invoice credited_amount / PO returned_amount adjusted; double-void and concurrent voids guarded.
 - Not voidable: documents that included a confirmed refund (cash moved), since recording money coming back is unsupported.
 - return-void for sales-order returns (same rules). Still open: credit balances/store credit.
+
+## hotfix14/15 (local, pushed with checkpoint)
+- purchase-receipt-void: void the latest receipt of a partly received purchase (admin, reason, stock-on-hand check, exact reversal).
+- Customer credit: explicit store_credit on over-credit credit notes (liability 2150, no cash), credit-apply to the same customer's open invoice. Direct payment with method store_credit is rejected.
