@@ -371,62 +371,82 @@ function renderReports() {
   if (caT) caT.onchange = () => render();
 }
 
-/* Cash vs accrual reconciliation (indirect method), computed read-only
-   from the journal: net income for the period is reconciled to the actual
-   change in cash+bank through the working-capital movements. The residual
-   is shown honestly as investing/financing/other, never forced to zero. */
-function accBalanceUpTo(code, dateStr) {
-  const a = (store.data.accounts || []).find(x => x.code === code);
-  if (!a) return 0;
+/* Cash movement classification, computed read-only from the journal.
+   Every journal entry that moves cash/bank (accounts 1000/1010) in the
+   period lands in exactly one bucket by its ref_type; unknown shapes fall
+   into unclassified, never into a made-up category. The bucket total must
+   equal the actual cash+bank change to the cent BY CONSTRUCTION — if it
+   does not, the card says so. No entry is modified; there is no plug. */
+function cashDeltaOf(entry, cashIds) {
   let s = 0;
-  for (const j of (store.data.journal || [])) {
-    if (dateStr && (j.date || '') > dateStr) continue;
-    for (const l of (j.lines || [])) if (l.account_id === a.id) s += num(l.debit) - num(l.credit);
-  }
+  for (const l of (entry.lines || [])) if (cashIds.includes(l.account_id)) s += num(l.debit) - num(l.credit);
   return Math.round(s * 100) / 100;
 }
 
-function accPeriodNet(codes, from, to, sign) {
-  const ids = (store.data.accounts || []).filter(a => codes.includes(a.code)).map(a => a.id);
-  let s = 0;
+function cashMovementReport(from, to) {
+  const cashIds = (store.data.accounts || []).filter(a => ['1000', '1010'].includes(a.code)).map(a => a.id);
+  const inPeriod = j => (j.date || '') >= from && (j.date || '') <= to;
+  const accNet = (codes, sign) => {
+    const ids = (store.data.accounts || []).filter(a => codes.includes(a.code)).map(a => a.id);
+    let s = 0;
+    for (const j of (store.data.journal || [])) {
+      if (!inPeriod(j)) continue;
+      for (const l of (j.lines || [])) if (ids.includes(l.account_id)) s += num(l.debit) - num(l.credit);
+    }
+    return Math.round(sign * s * 100) / 100;
+  };
+  const revenue = accNet(['4000', '4100', '7100'], -1);
+  const expenses = accNet(['5000', '5200', '6000', '6100', '6200', '6900'], 1);
+  const ni = Math.round((revenue - expenses) * 100) / 100;
+
+  const bucketDefs = [
+    { key: 'collections', match: (j, d) => j.ref_type === 'payment' && d > 0 },
+    { key: 'payouts', match: (j, d) => (j.ref_type === 'payment' || j.ref_type === 'pos-refund') && d < 0 },
+    { key: 'expenses_paid', match: (j, d) => j.ref_type === 'expense' && d < 0 },
+    { key: 'payroll_paid', match: (j, d) => j.ref_type === 'payroll' && d < 0 },
+    { key: 'asset_investing', match: (j, d) => (j.ref_type === 'asset' || j.ref_type === 'asset-dispose') && d !== 0 },
+    { key: 'internal_transfer', match: (j, d) => j.ref_type === 'reclass' },
+  ];
+  const buckets = bucketDefs.map(b => ({ key: b.key, count: 0, sum: 0 }));
+  const uncl = { key: 'unclassified', count: 0, sum: 0 };
+  let actual = 0;
   for (const j of (store.data.journal || [])) {
-    if ((j.date || '') < from || (j.date || '') > to) continue;
-    for (const l of (j.lines || [])) if (ids.includes(l.account_id)) s += num(l.debit) - num(l.credit);
+    if (!inPeriod(j)) continue;
+    const d = cashDeltaOf(j, cashIds);
+    if (!d) continue;
+    actual = Math.round((actual + d) * 100) / 100;
+    const i = bucketDefs.findIndex(b => b.match(j, d));
+    const tgt = i >= 0 ? buckets[i] : uncl;
+    tgt.count++;
+    tgt.sum = Math.round((tgt.sum + d) * 100) / 100;
   }
-  return Math.round(sign * s * 100) / 100;
+  buckets.push(uncl);
+  const total = Math.round(buckets.reduce((s, b) => s + b.sum, 0) * 100) / 100;
+  return { from, to, revenue, expenses, ni, buckets, total, actual, check: Math.abs(total - actual) <= 0.005 };
 }
 
 function cashAccrualCard() {
   const today = todayStr();
   const from = ($('#caFrom') && $('#caFrom').value) || today.slice(0, 8) + '01';
   const to = ($('#caTo') && $('#caTo').value) || today;
-  const prevDay = (() => { const dt = new Date(from + 'T00:00:00Z'); dt.setUTCDate(dt.getUTCDate() - 1); return dt.toISOString().slice(0, 10); })();
-  const ni = accPeriodNet(['4000', '4100', '7100'], from, to, -1) + accPeriodNet(['5000', '5200', '6000', '6100', '6200', '6900'], from, to, -1);
-  const depr = accPeriodNet(['6200'], from, to, 1);
-  const dAR = accBalanceUpTo('1100', to) - accBalanceUpTo('1100', prevDay);
-  const dAP = accBalanceUpTo('2000', to) - accBalanceUpTo('2000', prevDay);
-  const dInv = accBalanceUpTo('1200', to) - accBalanceUpTo('1200', prevDay);
-  const dVAT = accBalanceUpTo('2100', to) - accBalanceUpTo('2100', prevDay);
-  const opCF = Math.round((ni + depr - dAR + dAP - dInv + dVAT) * 100) / 100;
-  const dCash = Math.round(((accBalanceUpTo('1000', to) + accBalanceUpTo('1010', to)) - (accBalanceUpTo('1000', prevDay) + accBalanceUpTo('1010', prevDay))) * 100) / 100;
-  const residual = Math.round((dCash - opCF) * 100) / 100;
+  const r = cashMovementReport(from, to);
   const row = (label, val, bold) => `<tr>${bold ? '<td><strong>' + label + '</strong></td><td><strong>' + money(val) + '</strong></td>' : '<td>' + label + '</td><td>' + money(val) + '</td>'}</tr>`;
+  const bucketLabel = { collections: t('Collections from customers'), payouts: t('Payments out (suppliers and refunds)'), expenses_paid: t('Expenses paid'), payroll_paid: t('Payroll paid'), asset_investing: t('Fixed assets bought / sold (cash)'), internal_transfer: t('Internal cash-bank transfers (reclass, net zero)'), unclassified: t('Unclassified / unreconciled cash movement') };
+  const bucketRows = r.buckets.filter(b => b.count).map(b => `<tr><td>${bucketLabel[b.key]} <span class="cell-sub">× ${b.count}</span></td><td>${money(b.sum)}</td></tr>`).join('');
   return `<div class="card"><h3>${t('Cash vs accrual reconciliation')}</h3>
-    <p class="cell-sub">${t('Accrual net income reconciled to the actual change in cash and bank (indirect method), computed live from the journal. The residual is investing/financing movement (fixed assets, equity, owner draws), shown as-is.')}</p>
+    <p class="cell-sub">${t('Accrual results next to classified cash movement for the period, computed live from the journal. Every entry that moves cash or bank is classified by its posting type; anything unrecognized stays unclassified. Entries that never touch cash (credit invoices and purchases, production and variance postings, depreciation, opening and migration equity entries) are excluded from cash by construction. Original entries are never modified.')}</p>
     <div class="form-grid">
       <label>${t('From')}<input type="date" id="caFrom" value="${from}"></label>
       <label>${t('To')}<input type="date" id="caTo" value="${to}"></label>
     </div>
     <div class="table-wrap"><table class="data"><tbody>
-      ${row(t('Net income (accrual, period)'), ni)}
-      ${row(t('Add back depreciation (non-cash)'), depr)}
-      ${row(t('Increase in receivables (unpaid invoices)'), -dAR)}
-      ${row(t('Increase in payables (unpaid bills)'), dAP)}
-      ${row(t('Increase in inventory (cash in stock)'), -dInv)}
-      ${row(t('Increase in VAT payable (collected, not yet owed out)'), dVAT)}
-      ${row(t('Operating cash flow (computed)'), opCF, true)}
-      ${row(t('Actual change in cash + bank'), dCash, true)}
-      ${row(t('Investing/financing/other (residual)'), residual)}
+      ${row(t('Revenue (accrual, earned in period)'), r.revenue)}
+      ${row(t('Expenses (accrual, incurred in period)'), r.expenses)}
+      ${row(t('Net income (accrual)'), r.ni, true)}
+      ${bucketRows}
+      ${row(t('Total classified cash movement'), r.total, true)}
+      ${row(t('Actual change in cash + bank'), r.actual, true)}
+      <tr><td>${t('Classification check')}</td><td style="color:${r.check ? 'var(--green)' : 'var(--red)'}">${r.check ? '✓' : '✗ ' + money(r.total - r.actual)}</td></tr>
     </tbody></table></div></div>`;
 }
 
