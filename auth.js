@@ -10,7 +10,7 @@ const SESSION_KEY = 'nexus-erp-session-v1';
 
 /* Views an admin can grant to an employee. users/inbox stay admin-only. */
 const GRANTABLE_VIEWS = ['dashboard', 'contacts', 'companies', 'deals', 'tasks', 'notes',
-  'quotes', 'orders', 'invoices', 'products', 'stock', 'purchases', 'suppliers', 'finance', 'projects', 'expenses', 'accounting', 'payments', 'employees', 'reports', 'contact', 'helpdesk', 'hr-self'];
+  'quotes', 'orders', 'invoices', 'products', 'stock', 'purchases', 'suppliers', 'finance', 'projects', 'expenses', 'accounting', 'payments', 'employees', 'reports', 'contact', 'helpdesk', 'hr-self', 'assets'];
 
 const Auth = {
   users: [],

@@ -46,6 +46,7 @@ const COLLECTION_VIEW = {
   contacts: 'contacts', companies: 'companies', deals: 'deals', tasks: 'tasks', quotes: 'quotes', projects: 'projects', timesheets: 'projects', sales_orders: 'orders', returns: 'orders',
   tickets: 'helpdesk', ticket_replies: 'helpdesk',
   leave_requests: ['employees', 'hr-self'], attendance: ['employees', 'hr-self'],
+  assets: 'assets',
   activities: 'contacts', products: 'products', suppliers: 'suppliers',
   invoices: 'invoices', purchases: 'purchases', ledger: 'finance', expenses: ['finance', 'expenses'], recurring: 'invoices',
   employees: 'employees', notes: 'notes', accounts: 'accounting', journal: 'accounting', payments: 'payments',
@@ -61,7 +62,7 @@ function emptyDb() {
     data: {
       meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1, orderSeq: 1, returnSeq: 1, ticketSeq: 1 },
       companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [], projects: [], timesheets: [], tickets: [], ticket_replies: [],
-      leave_requests: [], attendance: [],
+      leave_requests: [], attendance: [], assets: [],
       products: [], suppliers: [], invoices: [], purchases: [], sales_orders: [], returns: [], recurring: [],
       ledger: [], expenses: [], employees: [], notes: [], messages: [], accounts: [], journal: [], payments: [],
       warehouses: [], stock_moves: [], settings: {},

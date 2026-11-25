@@ -29,7 +29,7 @@ const MODULE_FILES = ['i18n.js', 'i18n-extra.js', 'core.js', 'seed.js', 'crm.js'
 /* Collections only the server may write (never accepted from a client PUT). */
 const SERVER_OWNED = new Set(['accounts', 'journal', 'payments', 'warehouses', 'stock_moves',
   'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring', 'expenses', 'projects', 'timesheets',
-  'tickets', 'ticket_replies', 'leave_requests', 'attendance']);
+  'tickets', 'ticket_replies', 'leave_requests', 'attendance', 'assets']);
 
 /* ---------------- browser sandbox ---------------- */
 
@@ -86,7 +86,7 @@ function makeSandbox() {
     postInvoiceSentJournal, postPurchaseReceivedJournal, postPayrollJournal,
     productWarehouseStock, recordStockMove, postOpeningStockJournal,
     applyReturnEffects, returnedQty, invoiceOpenAmount, inventoryGap,
-    advanceDate,
+    advanceDate, accumDepr, accountCode,
   })`, sandbox);
   return api;
 }
@@ -1086,6 +1086,147 @@ const OPS = {
       need(a, 'attendance record not found');
       need(user.role === 'admin' || a.recorded_by === user.username, 'only the recorder or admin can delete it');
       S.data.attendance = S.data.attendance.filter(x => x.id !== a.id);
+      S.save();
+      return { deleted: a.id };
+    },
+  },
+
+  /* ---------------- fixed assets ---------------- */
+  'asset-save': {
+    view: 'assets',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const out = p.out || {};
+      need(String(out.name || '').trim(), 'name required');
+      const cost = Math.round(ctx.num(out.cost) * 100) / 100;
+      const salvage = Math.round(ctx.num(out.salvage) * 100) / 100;
+      const life = Math.round(ctx.num(out.life_months));
+      need(cost > 0, 'cost must be positive');
+      need(salvage >= 0 && salvage < cost, 'salvage must be below cost');
+      need(life >= 1 && life <= 600, 'useful life must be 1-600 months');
+      need(/^\d{4}-\d{2}-\d{2}$/.test(out.purchase_date || ''), 'purchase date required');
+      if (p.id || out.id) {
+        const a = (S.data.assets || []).find(x => x.id === Number(p.id || out.id));
+        need(a, 'asset not found');
+        /* financial terms are locked once depreciation has run — changing
+           them retroactively would rewrite posted journal history */
+        need(!a.depr_through, 'depreciation already posted: financial terms are locked');
+        need(a.status === 'active', 'a disposed asset cannot be edited');
+        Object.assign(a, {
+          name: String(out.name).trim(), category: String(out.category || ''),
+          purchase_date: out.purchase_date, cost, salvage, life_months: life,
+        });
+        S.save();
+        return { asset: a };
+      }
+      const row = S.add('assets', {
+        name: String(out.name).trim(), category: String(out.category || ''),
+        purchase_date: out.purchase_date, cost, salvage, life_months: life,
+        status: 'active', depr_through: null, disposed_date: null, proceeds: null,
+        created_by: user.username, created_at: new Date().toISOString(),
+      });
+      /* acquisition posting is an explicit opt-in, never implicit */
+      if (out.post_acquisition) {
+        ctx.postJournal({
+          date: out.purchase_date, memo: `Asset acquisition - ${row.name}`, ref_type: 'asset', ref_id: row.id,
+          lines: [
+            { account_id: ctx.accountByCode('1500').id, debit: cost },
+            { account_id: ctx.accountByCode('1000').id, credit: cost },
+          ],
+        });
+        row.acquisition_posted = true;
+      }
+      S.save();
+      return { asset: row };
+    },
+  },
+  'asset-depreciate': {
+    view: 'assets',
+    run(ctx, p) {
+      /* explicit monthly run: posts one straight-line month per active asset
+         per elapsed unposted month. The per-asset cursor makes a re-run for
+         the same month a no-op; a long gap surfaces as a catch-up count. */
+      const S = ctx.store;
+      need(/^\d{4}-\d{2}$/.test(p.month || ''), 'month required (YYYY-MM)');
+      const month = p.month;
+      let posted = 0;
+      const details = [];
+      for (const a of (S.data.assets || [])) {
+        if (a.status !== 'active') continue;
+        const purchaseMonth = (a.purchase_date || '').slice(0, 7);
+        if (!purchaseMonth || month <= purchaseMonth) continue;
+        if (a.depr_through && month <= a.depr_through) continue;
+        const monthly = Math.round((a.cost - a.salvage) / a.life_months * 100) / 100;
+        if (monthly <= 0) continue;
+        /* catch-up: every month after the cursor through the requested one */
+        let cur = a.depr_through || purchaseMonth;
+        let guard = 0;
+        while (cur < month && guard++ < 60) {
+          const [y, m] = cur.split('-').map(Number);
+          cur = `${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, '0')}`;
+          const accum = ctx.accumDepr(a.id);
+          if (accum + monthly > a.cost - a.salvage + 0.005) { a.depr_through = cur; continue; }
+          ctx.postJournal({
+            date: `${cur}-28`, memo: `Depreciation ${cur} - ${a.name}`, ref_type: 'asset-depr', ref_id: a.id,
+            lines: [
+              { account_id: ctx.accountByCode('6200').id, debit: monthly },
+              { account_id: ctx.accountByCode('1590').id, credit: monthly },
+            ],
+          });
+          a.depr_through = cur;
+          posted++;
+        }
+        details.push(`${a.name}: ${a.depr_through}`);
+      }
+      need(posted > 0, 'nothing to post for this month');
+      S.save();
+      return { posted, details };
+    },
+  },
+  'asset-dispose': {
+    view: 'assets',
+    run(ctx, p) {
+      const S = ctx.store;
+      const a = (S.data.assets || []).find(x => x.id === Number(p.id));
+      need(a, 'asset not found');
+      need(a.status === 'active', 'asset already disposed');
+      need(/^\d{4}-\d{2}-\d{2}$/.test(p.date || ''), 'disposal date required');
+      const proceeds = Math.round(ctx.num(p.proceeds) * 100) / 100;
+      need(proceeds >= 0, 'proceeds must not be negative');
+      /* only depreciation actually posted to the books is reversed out */
+      const accum = Math.round(ctx.accumDepr(a.id) * 100) / 100;
+      const book = Math.round((a.cost - accum) * 100) / 100;
+      const lines = [
+        { account_id: ctx.accountByCode('1590').id, debit: accum },
+        { account_id: ctx.accountByCode('1500').id, credit: a.cost },
+      ];
+      if (proceeds > 0) lines.unshift({ account_id: ctx.accountByCode('1000').id, debit: proceeds });
+      const diff = Math.round((proceeds - book) * 100) / 100;
+      if (diff > 0) lines.push({ account_id: ctx.accountByCode('7100').id, credit: diff });
+      if (diff < 0) lines.push({ account_id: ctx.accountByCode('6900').id, debit: -diff });
+      /* an unposted acquisition (register-only asset) has nothing in 1500 to
+         clear — skip the asset-account legs in that case */
+      const jl = a.acquisition_posted ? lines : lines.filter(l => {
+        const code = ctx.accountCode ? ctx.accountCode(l.account_id) : null;
+        return code !== '1500' && code !== '1590';
+      });
+      ctx.postJournal({ date: p.date, memo: `Disposal - ${a.name}`, ref_type: 'asset-dispose', ref_id: a.id, lines: jl });
+      a.status = 'disposed';
+      a.disposed_date = p.date;
+      a.proceeds = proceeds;
+      S.save();
+      return { asset: a, book_value: book, gain_loss: diff };
+    },
+  },
+  'asset-delete': {
+    view: 'assets',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const a = (S.data.assets || []).find(x => x.id === Number(p.id));
+      need(a, 'asset not found');
+      need(!a.depr_through && !a.acquisition_posted && a.status === 'active', 'an asset with posted history stays in the register');
+      need(user.role === 'admin' || a.created_by === user.username, 'only the creator or admin can delete');
+      S.data.assets = S.data.assets.filter(x => x.id !== a.id);
       S.save();
       return { deleted: a.id };
     },

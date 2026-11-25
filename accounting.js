@@ -20,6 +20,11 @@ const DEFAULT_COA = [
   { code: '5000', name: 'Cost of Goods Sold', type: 'expense' },
   { code: '6000', name: 'Operating Expenses', type: 'expense' },
   { code: '6100', name: 'Payroll Expense', type: 'expense' },
+  { code: '1500', name: 'Fixed Assets', type: 'asset' },
+  { code: '1590', name: 'Accumulated Depreciation', type: 'asset' },
+  { code: '6200', name: 'Depreciation Expense', type: 'expense' },
+  { code: '6900', name: 'Loss on Disposal', type: 'expense' },
+  { code: '7100', name: 'Gain on Disposal', type: 'revenue' },
 ];
 
 function ensureCOA() {
@@ -62,6 +67,21 @@ function ensureCOA() {
     }
   }
   if (added) store.save();
+}
+
+function accountCode(id) {
+  const a = (store.data.accounts || []).find(x => x.id === id);
+  return a ? a.code : null;
+}
+
+/* depreciation posted to the books for one asset (journal is the source) */
+function accumDepr(assetId) {
+  const acc = accountByCode('1590');
+  if (!acc) return 0;
+  return (store.data.journal || []).reduce((s, j) => {
+    if (j.ref_type !== 'asset-depr' || j.ref_id !== assetId) return s;
+    return s + (j.lines || []).reduce((t, l) => t + (l.account_id === acc.id ? num(l.credit) : 0), 0);
+  }, 0);
 }
 
 function accountByCode(code) {
