@@ -32,7 +32,7 @@ const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 /* Collection -> permission view. A user may read/write a collection only if
    their role grants its view (admins: everything). */
 const COLLECTION_VIEW = {
-  contacts: 'contacts', companies: 'companies', deals: 'deals', tasks: 'tasks',
+  contacts: 'contacts', companies: 'companies', deals: 'deals', tasks: 'tasks', quotes: 'quotes',
   activities: 'contacts', products: 'products', suppliers: 'suppliers',
   invoices: 'invoices', purchases: 'purchases', ledger: 'finance',
   employees: 'employees', notes: 'notes',
@@ -45,7 +45,7 @@ function emptyDb() {
   return {
     users: [],           // {id, username, salt, hash, role, modules[], mustChange, created_at}
     data: {
-      meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1 },
+      meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1 },
       companies: [], contacts: [], deals: [], tasks: [], activities: [],
       products: [], suppliers: [], invoices: [], purchases: [],
       ledger: [], employees: [], notes: [], messages: [], settings: {},
@@ -203,7 +203,7 @@ const api = {
     }
     if (incoming.meta && typeof incoming.meta === 'object') {
       const m = incoming.meta;
-      for (const k of ['nextId', 'invoiceSeq', 'purchaseSeq']) {
+      for (const k of ['nextId', 'invoiceSeq', 'purchaseSeq', 'quoteSeq']) {
         if (Number.isFinite(m[k])) db.data.meta[k] = Math.max(db.data.meta[k] || 1, m[k]);
       }
     }

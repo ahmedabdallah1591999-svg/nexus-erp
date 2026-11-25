@@ -307,6 +307,16 @@ function exportSheets() {
   });
 
   sheets.push({
+    name: t('Quotes'),
+    view: 'quotes',
+    rows: [[t('Quote #'), t('Customer'), t('Issue date'), t('Valid until'), t('Status'), t('Subtotal'), t('Tax'), t('Total')],
+      ...(d.quotes || []).map(q => {
+        const sub = quoteSubtotal(q);
+        return [q.number || '', cname(q.contact_id), q.issue_date || '', q.valid_until || '', t(q.status || ''), sub, quoteTotal(q) - sub, quoteTotal(q)];
+      })],
+  });
+
+  sheets.push({
     name: t('Companies'),
     view: 'companies',
     rows: [[t('Company name'), t('Industry'), t('Email'), t('Phone'), t('Website'), t('Address'), t('Notes')],
