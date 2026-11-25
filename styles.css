@@ -328,3 +328,11 @@ table.data tbody tr:hover { background: #f8f9ff; }
 /* Brand name is long — keep it tidy in the sidebar */
 .brand-name { font-size: 12.5px; line-height: 1.35; }
 .setup-note { font-size: 13px; color: var(--muted); background: var(--accent-soft); border-radius: 8px; padding: 8px 10px; margin-bottom: 12px; }
+
+/* helpdesk */
+.chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line, #d7dce3); background: var(--card, #fff); cursor: pointer; font-size: 13px; }
+.chip-active { background: var(--brand, #4f46e5); color: #fff; border-color: var(--brand, #4f46e5); }
+.note-item { padding: 8px 10px; border: 1px solid var(--line, #d7dce3); border-radius: 8px; margin-bottom: 6px; background: var(--card, #fff); }
+.note-internal { background: #fff8e1; border-color: #ead27a; }
+.reply-box textarea { font: inherit; padding: 8px; border: 1px solid var(--line, #d7dce3); border-radius: 8px; }

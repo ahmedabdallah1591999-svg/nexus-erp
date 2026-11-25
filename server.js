@@ -44,6 +44,7 @@ const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
    their role grants its view (admins: everything). */
 const COLLECTION_VIEW = {
   contacts: 'contacts', companies: 'companies', deals: 'deals', tasks: 'tasks', quotes: 'quotes', projects: 'projects', timesheets: 'projects', sales_orders: 'orders', returns: 'orders',
+  tickets: 'helpdesk', ticket_replies: 'helpdesk',
   activities: 'contacts', products: 'products', suppliers: 'suppliers',
   invoices: 'invoices', purchases: 'purchases', ledger: 'finance', expenses: ['finance', 'expenses'], recurring: 'invoices',
   employees: 'employees', notes: 'notes', accounts: 'accounting', journal: 'accounting', payments: 'payments',
@@ -57,8 +58,8 @@ function emptyDb() {
   return {
     users: [],           // {id, username, salt, hash, role, modules[], mustChange, created_at}
     data: {
-      meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1, orderSeq: 1, returnSeq: 1 },
-      companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [], projects: [], timesheets: [],
+      meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1, orderSeq: 1, returnSeq: 1, ticketSeq: 1 },
+      companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [], projects: [], timesheets: [], tickets: [], ticket_replies: [],
       products: [], suppliers: [], invoices: [], purchases: [], sales_orders: [], returns: [], recurring: [],
       ledger: [], expenses: [], employees: [], notes: [], messages: [], accounts: [], journal: [], payments: [],
       warehouses: [], stock_moves: [], settings: {},
@@ -249,7 +250,7 @@ const api = {
     }
     if (incoming.meta && typeof incoming.meta === 'object') {
       const m = incoming.meta;
-      for (const k of ['nextId', 'invoiceSeq', 'purchaseSeq', 'quoteSeq', 'orderSeq', 'returnSeq']) {
+      for (const k of ['nextId', 'invoiceSeq', 'purchaseSeq', 'quoteSeq', 'orderSeq', 'returnSeq', 'ticketSeq']) {
         if (Number.isFinite(m[k])) db.data.meta[k] = Math.max(db.data.meta[k] || 1, m[k]);
       }
     }

@@ -28,7 +28,8 @@ const MODULE_FILES = ['i18n.js', 'i18n-extra.js', 'core.js', 'seed.js', 'crm.js'
 
 /* Collections only the server may write (never accepted from a client PUT). */
 const SERVER_OWNED = new Set(['accounts', 'journal', 'payments', 'warehouses', 'stock_moves',
-  'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring', 'expenses', 'projects', 'timesheets']);
+  'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring', 'expenses', 'projects', 'timesheets',
+  'tickets', 'ticket_replies']);
 
 /* ---------------- browser sandbox ---------------- */
 
@@ -869,6 +870,95 @@ const OPS = {
       return { return: row };
     },
   },
+
+  /* ---------------- helpdesk ---------------- */
+  'ticket-save': {
+    view: 'helpdesk',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const out = p.out || {};
+      const now = new Date().toISOString();
+      const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
+      const STATUSES = ['open', 'in-progress', 'resolved', 'closed'];
+      need(String(out.subject || '').trim(), 'subject required');
+      need(!out.contact_id || S.data.contacts.some(c => c.id === Number(out.contact_id)), 'customer not found');
+      const assignee = String(out.assigned_to || '').trim();
+      /* assignment is validated against real accounts — a forged username
+         would route work to a person who cannot see it */
+      need(!assignee || (ctx.dbUsers || []).some(u => u.username === assignee), 'assignee not found');
+      if (p.id || out.id) {
+        const tk = (S.data.tickets || []).find(x => x.id === Number(p.id || out.id));
+        need(tk, 'ticket not found');
+        /* shared queue: any helpdesk agent may pick up and work a ticket;
+           authorship stays session-derived on tickets and replies, and
+           deletion stays restricted (ticket-delete below) */
+        Object.assign(tk, {
+          subject: String(out.subject).trim(), description: String(out.description || ''),
+          contact_id: out.contact_id || null,
+          priority: PRIORITIES.includes(out.priority) ? out.priority : tk.priority,
+          status: STATUSES.includes(out.status) ? out.status : tk.status,
+          assigned_to: assignee || null, updated_at: now,
+        });
+        S.save();
+        return { ticket: tk };
+      }
+      /* identity and numbering come from the server, never the payload */
+      const row = S.add('tickets', {
+        number: `TKT-${String(S.data.meta.ticketSeq++).padStart(4, '0')}`,
+        subject: String(out.subject).trim(), description: String(out.description || ''),
+        contact_id: out.contact_id || null,
+        priority: PRIORITIES.includes(out.priority) ? out.priority : 'medium',
+        status: 'open', assigned_to: assignee || null,
+        created_by: user.username, created_at: now, updated_at: now,
+      });
+      S.save();
+      return { ticket: row };
+    },
+  },
+  'ticket-status': {
+    view: 'helpdesk',
+    run(ctx, p) {
+      const S = ctx.store;
+      const tk = (S.data.tickets || []).find(x => x.id === Number(p.id));
+      need(tk, 'ticket not found');
+      need(['open', 'in-progress', 'resolved', 'closed'].includes(p.status), 'unknown status');
+      tk.status = p.status;
+      tk.updated_at = new Date().toISOString();
+      S.save();
+      return { ticket: tk };
+    },
+  },
+  'ticket-reply': {
+    view: 'helpdesk',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const tk = (S.data.tickets || []).find(x => x.id === Number(p.ticket_id));
+      need(tk, 'ticket not found');
+      need(String(p.body || '').trim(), 'reply required');
+      /* author comes from the session; internal notes are a flag the
+         client cannot use to forge authorship */
+      const row = S.add('ticket_replies', {
+        ticket_id: tk.id, author: user.username, body: String(p.body).trim(),
+        internal: !!p.internal, created_at: new Date().toISOString(),
+      });
+      tk.updated_at = row.created_at;
+      S.save();
+      return { reply: row };
+    },
+  },
+  'ticket-delete': {
+    view: 'helpdesk',
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const tk = (S.data.tickets || []).find(x => x.id === Number(p.id));
+      need(tk, 'ticket not found');
+      need(user.role === 'admin' || tk.created_by === user.username, 'only the creator or admin can delete');
+      S.data.tickets = S.data.tickets.filter(x => x.id !== tk.id);
+      S.data.ticket_replies = (S.data.ticket_replies || []).filter(r => r.ticket_id !== tk.id);
+      S.save();
+      return { deleted: tk.id };
+    },
+  },
 };
 
 /* ---------------- engine ---------------- */
@@ -884,6 +974,7 @@ function runTx(db, user, op, payload, canView) {
   try {
     ctx = makeSandbox();   // the captured module API (ctx.store, ctx.saveInvoice, ...)
     ctx.store.data = JSON.parse(JSON.stringify(db.data));
+    ctx.dbUsers = db.users || [];
     ctx.ensureCOA();
     ctx.ensureStockBaseline();
     const result = spec.run(ctx, payload || {}, user);
