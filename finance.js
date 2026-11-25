@@ -364,7 +364,70 @@ function renderReports() {
       <div class="panel"><h3>${t('Deal pipeline')}</h3>${pipeHtml}</div>
       <div class="panel"><h3>${t('Top products by units sold')}</h3>${topHtml}</div>
       <div class="panel"><h3>${t('Expenses by category')}</h3>${expHtml}</div>
-    </div>`;
+    </div>
+    ${cashAccrualCard()}`;
+  const caF = $('#caFrom'), caT = $('#caTo');
+  if (caF) caF.onchange = () => render();
+  if (caT) caT.onchange = () => render();
+}
+
+/* Cash vs accrual reconciliation (indirect method), computed read-only
+   from the journal: net income for the period is reconciled to the actual
+   change in cash+bank through the working-capital movements. The residual
+   is shown honestly as investing/financing/other, never forced to zero. */
+function accBalanceUpTo(code, dateStr) {
+  const a = (store.data.accounts || []).find(x => x.code === code);
+  if (!a) return 0;
+  let s = 0;
+  for (const j of (store.data.journal || [])) {
+    if (dateStr && (j.date || '') > dateStr) continue;
+    for (const l of (j.lines || [])) if (l.account_id === a.id) s += num(l.debit) - num(l.credit);
+  }
+  return Math.round(s * 100) / 100;
+}
+
+function accPeriodNet(codes, from, to, sign) {
+  const ids = (store.data.accounts || []).filter(a => codes.includes(a.code)).map(a => a.id);
+  let s = 0;
+  for (const j of (store.data.journal || [])) {
+    if ((j.date || '') < from || (j.date || '') > to) continue;
+    for (const l of (j.lines || [])) if (ids.includes(l.account_id)) s += num(l.debit) - num(l.credit);
+  }
+  return Math.round(sign * s * 100) / 100;
+}
+
+function cashAccrualCard() {
+  const today = todayStr();
+  const from = ($('#caFrom') && $('#caFrom').value) || today.slice(0, 8) + '01';
+  const to = ($('#caTo') && $('#caTo').value) || today;
+  const prevDay = (() => { const dt = new Date(from + 'T00:00:00Z'); dt.setUTCDate(dt.getUTCDate() - 1); return dt.toISOString().slice(0, 10); })();
+  const ni = accPeriodNet(['4000', '4100', '7100'], from, to, -1) + accPeriodNet(['5000', '5200', '6000', '6100', '6200', '6900'], from, to, -1);
+  const depr = accPeriodNet(['6200'], from, to, 1);
+  const dAR = accBalanceUpTo('1100', to) - accBalanceUpTo('1100', prevDay);
+  const dAP = accBalanceUpTo('2000', to) - accBalanceUpTo('2000', prevDay);
+  const dInv = accBalanceUpTo('1200', to) - accBalanceUpTo('1200', prevDay);
+  const dVAT = accBalanceUpTo('2100', to) - accBalanceUpTo('2100', prevDay);
+  const opCF = Math.round((ni + depr - dAR + dAP - dInv + dVAT) * 100) / 100;
+  const dCash = Math.round(((accBalanceUpTo('1000', to) + accBalanceUpTo('1010', to)) - (accBalanceUpTo('1000', prevDay) + accBalanceUpTo('1010', prevDay))) * 100) / 100;
+  const residual = Math.round((dCash - opCF) * 100) / 100;
+  const row = (label, val, bold) => `<tr>${bold ? '<td><strong>' + label + '</strong></td><td><strong>' + money(val) + '</strong></td>' : '<td>' + label + '</td><td>' + money(val) + '</td>'}</tr>`;
+  return `<div class="card"><h3>${t('Cash vs accrual reconciliation')}</h3>
+    <p class="cell-sub">${t('Accrual net income reconciled to the actual change in cash and bank (indirect method), computed live from the journal. The residual is investing/financing movement (fixed assets, equity, owner draws), shown as-is.')}</p>
+    <div class="form-grid">
+      <label>${t('From')}<input type="date" id="caFrom" value="${from}"></label>
+      <label>${t('To')}<input type="date" id="caTo" value="${to}"></label>
+    </div>
+    <div class="table-wrap"><table class="data"><tbody>
+      ${row(t('Net income (accrual, period)'), ni)}
+      ${row(t('Add back depreciation (non-cash)'), depr)}
+      ${row(t('Increase in receivables (unpaid invoices)'), -dAR)}
+      ${row(t('Increase in payables (unpaid bills)'), dAP)}
+      ${row(t('Increase in inventory (cash in stock)'), -dInv)}
+      ${row(t('Increase in VAT payable (collected, not yet owed out)'), dVAT)}
+      ${row(t('Operating cash flow (computed)'), opCF, true)}
+      ${row(t('Actual change in cash + bank'), dCash, true)}
+      ${row(t('Investing/financing/other (residual)'), residual)}
+    </tbody></table></div></div>`;
 }
 
 /* ---------------- Registration ---------------- */
