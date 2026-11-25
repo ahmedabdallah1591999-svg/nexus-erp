@@ -16,6 +16,13 @@
  *
  * Requires Node.js 18+ (https://nodejs.org — free). No npm packages needed.
  * Run:  node server.js   (then open http://localhost:8080)
+ *
+ * Network binding: by default the server listens on 127.0.0.1 only — no other
+ * device can reach it. To share with the team on the office network, start
+ * with HOST=0.0.0.0 (e.g. `HOST=0.0.0.0 node server.js`). That mode is
+ * cleartext HTTP: use it only on a trusted network, and prefer HTTPS
+ * (Tailscale Serve or a reverse proxy) before real credentials cross it.
+ * First-run admin setup is accepted only from this machine, in every mode.
  */
 
 const http = require('http');
@@ -35,6 +42,10 @@ function enqueueWrite(fn) {
 }
 
 const PORT = process.env.PORT || 8080;
+/* Bind address. Default is loopback only, so a fresh install is never
+   reachable (and its setup page never claimable) from another device.
+   Set HOST=0.0.0.0 to share on the local network (cleartext, trusted LAN). */
+const HOST = process.env.HOST || '127.0.0.1';
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
 const DB_FILE = path.join(DATA_DIR, 'store.json');
@@ -168,9 +179,15 @@ function dataFor(user) {
   return out;
 }
 
+/* Baseline headers on every response. The API is Bearer-token based (no
+   ambient cookies), so classic CSRF does not apply; nosniff/frame/referrer
+   headers harden the static app. */
+const SEC_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer' };
+
 function json(res, code, obj) {
   const body = JSON.stringify(obj);
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...SEC_HEADERS });
   res.end(body);
 }
 
@@ -190,12 +207,24 @@ function authUser(req) {
   return username ? db.users.find(u => u.username === username) || null : null;
 }
 
+/* True only when the request arrived over loopback — used to keep first-run
+   admin setup claimable only from the machine itself, even when the server
+   is shared on the LAN with HOST=0.0.0.0. */
+function isLoopback(req) {
+  const a = String((req.socket && req.socket.remoteAddress) || '');
+  const v4 = a.startsWith('::ffff:') ? a.slice(7) : a;
+  return v4 === '127.0.0.1' || a === '::1';
+}
+
 /* ---------------- API ---------------- */
 
 const api = {
   'GET /api/ping': (req, res) => json(res, 200, { ok: true, server: true, needsSetup: db.users.length === 0 }),
 
   'POST /api/setup': async (req, res) => {
+    /* The installer sits at the machine: never allow a remote device to
+       claim the first admin account, whatever the bind address is. */
+    if (!isLoopback(req)) return json(res, 403, { error: 'setup is only allowed from this machine' });
     if (db.users.length || api._setupBusy) return json(res, 409, { error: 'already set up' });
     api._setupBusy = true;
     try {
@@ -386,7 +415,7 @@ function serveStatic(req, res) {
   if (!file.startsWith(ROOT) || file.startsWith(DATA_DIR)) { res.writeHead(403); return res.end('forbidden'); }
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404); return res.end('not found'); }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', ...SEC_HEADERS });
     res.end(buf);
   });
 }
@@ -408,8 +437,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   console.log(`Nexus ERP local server — أحمد عبدالله بيزنس ديفيلوبمنت`);
-  console.log(`Running on http://localhost:${PORT} — share http://<this-machine-IP>:${PORT} with the team.`);
-  console.log(db.users.length ? `${db.users.length} user account(s) on file.` : 'First run: open the app and create the admin account.');
+  if (HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1') {
+    console.log(`Running on http://localhost:${PORT} — reachable from THIS machine only.`);
+    console.log(`To share with the team: HOST=0.0.0.0 node server.js  (cleartext HTTP — trusted office network only; prefer HTTPS via Tailscale Serve or a reverse proxy).`);
+  } else {
+    console.log(`Running on http://${HOST}:${PORT} — reachable from the network (cleartext HTTP: trusted network only).`);
+  }
+  console.log(db.users.length ? `${db.users.length} user account(s) on file.` : 'First run: create the admin account from THIS machine.');
 });
