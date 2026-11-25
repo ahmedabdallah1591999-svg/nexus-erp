@@ -37,7 +37,11 @@ function editProduct(row) {
     out.stock = num(out.stock); out.reorder_level = num(out.reorder_level);
     if (inServerMode()) { txCall('product-save', { id: row && row.id, out }, row ? t('Product updated') : t('Product added')); closeModal(); render(); return; }
     if (row) { store.update('products', row.id, out); toast(t('Product updated')); }
-    else { store.add('products', out); toast(t('Product added')); }
+    else {
+      const p = store.add('products', out);
+      if (num(out.stock) > 0 && typeof postOpeningStockJournal === 'function') { ensureCOA(); postOpeningStockJournal(p, num(out.stock)); }
+      toast(t('Product added'));
+    }
     render();
   });
 }
@@ -326,6 +330,18 @@ function saveInvoice(existing, out) {
   } else if (inv.status === 'draft' && inv.stock_applied) {
     applyStock(inv.items, +1, { reason: 'invoice-cancel', ref_type: 'invoice', ref_id: inv.id });
     inv.stock_applied = false;
+  }
+  // COGS: inventory becomes cost of goods sold when stock leaves; the
+  // entry reverses if the invoice goes back to draft
+  if (typeof postInvoiceCOGSJournal === 'function') {
+    ensureCOA();
+    if (inv.stock_applied && !inv.journal_cogs) {
+      if (postInvoiceCOGSJournal(inv)) inv.journal_cogs = true;
+    } else if (!inv.stock_applied && inv.journal_cogs) {
+      const cogsEntry = store.data.journal.find(j => j.ref_type === 'invoice-cogs' && j.ref_id === inv.id);
+      if (cogsEntry) reverseJournal(cogsEntry.id, `${t('Reversal of')} COGS ${inv.number}`);
+      inv.journal_cogs = false;
+    }
   }
   // accrual book: AR/revenue when the invoice leaves draft, cash when paid
   if (typeof ensureCOA === 'function') {

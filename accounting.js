@@ -114,6 +114,9 @@ function accountingInvariants() {
   if (Math.abs(assets - (liab + eq + rev - exp)) > 0.01) {
     bad.push(`accounting equation broken: assets ${assets.toFixed(2)} != L ${liab.toFixed(2)} + E ${eq.toFixed(2)} + (R ${rev.toFixed(2)} - X ${exp.toFixed(2)})`);
   }
+  /* the Inventory account must reconcile with the stock ledger at cost —
+     a balanced journal alone does not prove correct financial semantics */
+  if (typeof inventoryValuationViolations === 'function') bad.push(...inventoryValuationViolations());
   return bad;
 }
 
@@ -152,6 +155,65 @@ function postPayrollJournal(month, total) {
     date: todayStr(), memo: `${t('Payroll')} ${month}`, ref_type: 'payroll', ref_id: null,
     lines: [{ account_id: accountByCode('6100').id, debit: total }, { account_id: accountByCode('1000').id, credit: total }],
   });
+}
+
+/* COGS when an invoice's stock leaves the warehouse: the sold units move
+   from Inventory to Cost of Goods Sold at their cost. This is what makes
+   the Inventory account reconcile with the stock ledger valuation. */
+function invoiceCostTotal(inv) {
+  return Math.round((inv.items || []).reduce((s, it) => {
+    const p = it.product_id ? store.product(it.product_id) : null;
+    return s + (p ? num(it.qty) * num(p.cost) : 0);
+  }, 0) * 100) / 100;
+}
+
+function postInvoiceCOGSJournal(inv) {
+  const cogs = invoiceCostTotal(inv);
+  if (!(cogs > 0)) return null;
+  return postJournal({
+    date: inv.issue_date || todayStr(), memo: `${t('Cost of goods sold for')} ${inv.number}`,
+    ref_type: 'invoice-cogs', ref_id: inv.id,
+    lines: [{ account_id: accountByCode('5000').id, debit: cogs }, { account_id: accountByCode('1200').id, credit: cogs }],
+  });
+}
+
+/* Opening stock is capital the business starts with: Dr Inventory / Cr equity. */
+function postOpeningStockJournal(product, qty) {
+  const val = Math.round(num(qty) * num(product.cost) * 100) / 100;
+  if (!(val > 0)) return null;
+  return postJournal({
+    date: todayStr(), memo: `${t('Opening stock')}: ${product.name}`,
+    ref_type: 'opening-stock', ref_id: product.id,
+    lines: [{ account_id: accountByCode('1200').id, debit: val }, { account_id: accountByCode('3000').id, credit: val }],
+  });
+}
+
+/* Stock adjustments change inventory value: losses are an expense, gains
+   reduce it. Dr/Cr against Operating Expenses at cost. */
+function postStockAdjustmentJournal(product, qty, memo) {
+  const val = Math.round(Math.abs(num(qty)) * num(product.cost) * 100) / 100;
+  if (!(val > 0)) return null;
+  const inv = accountByCode('1200').id, opex = accountByCode('6000').id;
+  const lines = num(qty) < 0
+    ? [{ account_id: opex, debit: val }, { account_id: inv, credit: val }]
+    : [{ account_id: inv, debit: val }, { account_id: opex, credit: val }];
+  return postJournal({
+    date: todayStr(), memo: `${t('Stock adjustment')}: ${product.name}${memo ? ' — ' + memo : ''}`,
+    ref_type: 'stock-adjustment', ref_id: product.id, lines,
+  });
+}
+
+/* Reconciliation proof: the Inventory GL account must equal the stock
+   ledger valued at cost, and the equation must still hold. Returns a list
+   of violations (empty = reconciled). */
+function inventoryValuationViolations() {
+  const out = [];
+  const invAcc = accountByCode('1200');
+  if (!invAcc) return out;
+  const gl = accountBalance(invAcc.id);
+  const val = Math.round(store.data.products.reduce((s, p) => s + num(p.stock) * num(p.cost), 0) * 100) / 100;
+  if (Math.abs(gl - val) > 0.01) out.push(`Inventory GL ${gl} != stock valuation at cost ${val}`);
+  return out;
 }
 
 /* ---------------- UI ---------------- */

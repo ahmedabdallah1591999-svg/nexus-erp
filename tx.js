@@ -24,11 +24,11 @@ const path = require('path');
 
 const ROOT = __dirname;
 const MODULE_FILES = ['i18n.js', 'i18n-extra.js', 'core.js', 'seed.js', 'crm.js',
-  'sales.js', 'quotes.js', 'accounting.js', 'payments.js', 'stock.js', 'finance.js'];
+  'sales.js', 'quotes.js', 'orders.js', 'accounting.js', 'payments.js', 'stock.js', 'finance.js'];
 
 /* Collections only the server may write (never accepted from a client PUT). */
 const SERVER_OWNED = new Set(['accounts', 'journal', 'payments', 'warehouses', 'stock_moves',
-  'ledger', 'invoices', 'purchases', 'quotes', 'products']);
+  'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns']);
 
 /* ---------------- browser sandbox ---------------- */
 
@@ -83,7 +83,8 @@ function makeSandbox() {
     adjustStock, transferStock, ensureCOA, ensureStockBaseline,
     accountingInvariants, stockInvariants, accountByCode, invoiceTotal,
     postInvoiceSentJournal, postPurchaseReceivedJournal, postPayrollJournal,
-    productWarehouseStock, recordStockMove,
+    productWarehouseStock, recordStockMove, postOpeningStockJournal,
+    applyReturnEffects, returnedQty, invoiceOpenAmount,
   })`, sandbox);
   return api;
 }
@@ -381,7 +382,10 @@ const OPS = {
       } else {
         const stock = ctx.num(out.stock);
         prod = S.add('products', { ...out, stock: 0 });
-        if (stock) ctx.recordStockMove({ product_id: prod.id, qty: stock, reason: 'opening', memo: ctx.t('Opening balance') });
+        if (stock) {
+          ctx.recordStockMove({ product_id: prod.id, qty: stock, reason: 'opening', memo: ctx.t('Opening balance') });
+          ctx.postOpeningStockJournal(prod, stock);   // Dr Inventory / Cr equity
+        }
         S.save();
       }
       return { product: prod };
@@ -397,6 +401,151 @@ const OPS = {
       need(Math.abs(ctx.num(prod.stock)) < 0.0005, 'product still has stock; adjust to zero first');
       S.remove('products', prod.id);
       return { deleted: prod.id };
+    },
+  },
+
+  /* ---------------- sales orders & returns ---------------- */
+
+  'order-save': {
+    view: 'orders',
+    run(ctx, p) {
+      const out = p.out || {};
+      need(['draft', 'confirmed'].includes(out.status), 'bad status');
+      const S = ctx.store;
+      validItems(out.items, S);
+      need(ctx.num(out.tax_rate) >= 0 && ctx.num(out.tax_rate) <= 100, 'bad tax rate');
+      let o;
+      if (p.id != null) {
+        o = S.data.sales_orders.find(x => x.id === Number(p.id));
+        need(o, 'order not found');
+        need(o.status === 'draft', 'only draft orders can be edited');
+        Object.assign(o, out);
+        S.save();
+      } else {
+        S.data.meta.orderSeq = S.data.meta.orderSeq || 1;
+        out.number = `SO-${String(S.data.meta.orderSeq).padStart(4, '0')}`;
+        S.data.meta.orderSeq++;
+        out.invoice_id = null;
+        out.quote_id = out.quote_id || null;
+        o = S.add('sales_orders', out);
+      }
+      return { order: o };
+    },
+  },
+
+  'quote-to-order': {
+    view: 'orders',
+    run(ctx, p) {
+      const S = ctx.store;
+      const q = S.data.quotes.find(x => x.id === Number(p.id));
+      need(q, 'quote not found');
+      need(!q.order_id, 'quote already converted to an order');
+      S.data.meta.orderSeq = S.data.meta.orderSeq || 1;
+      const o = S.add('sales_orders', {
+        number: `SO-${String(S.data.meta.orderSeq++).padStart(4, '0')}`,
+        status: 'draft', contact_id: q.contact_id, order_date: ctx.todayStr(),
+        tax_rate: ctx.num(q.tax_rate),
+        notes: `${ctx.t('From quote')} ${q.number}${q.notes ? ' — ' + q.notes : ''}`,
+        items: (q.items || []).map(it => ({ product_id: it.product_id || null, description: it.description || '', qty: ctx.num(it.qty), price: ctx.num(it.price) })),
+        quote_id: q.id, invoice_id: null,
+      });
+      q.order_id = o.id;
+      S.save();
+      return { order: o };
+    },
+  },
+
+  'order-confirm': {
+    view: 'orders',
+    run(ctx, p) {
+      const S = ctx.store;
+      const o = S.data.sales_orders.find(x => x.id === Number(p.id));
+      need(o, 'order not found');
+      need(o.status === 'draft', 'only a draft order can be confirmed');
+      o.status = 'confirmed';
+      S.save();
+      return { order: o };
+    },
+  },
+
+  /* Fulfillment creates the real invoice through saveInvoice, so stock,
+     COGS and revenue journals all post under the invoice's own rules.
+     Idempotent: an order with invoice_id can never be fulfilled twice —
+     the write queue serializes any concurrent attempts. */
+  'order-fulfill': {
+    view: 'orders',
+    run(ctx, p) {
+      const S = ctx.store;
+      const o = S.data.sales_orders.find(x => x.id === Number(p.id));
+      need(o, 'order not found');
+      need(o.status === 'confirmed', 'only a confirmed order can be fulfilled');
+      need(!o.invoice_id, 'order already fulfilled');
+      for (const it of o.items) {
+        const prod = it.product_id != null ? S.data.products.find(x => x.id === Number(it.product_id)) : null;
+        if (prod) need(ctx.num(prod.stock) >= ctx.num(it.qty), `insufficient stock for ${prod.name}`);
+      }
+      ctx.saveInvoice(null, {
+        status: 'sent', contact_id: o.contact_id,
+        issue_date: ctx.todayStr(), due_date: ctx.todayStr(),
+        tax_rate: ctx.num(o.tax_rate),
+        notes: `${ctx.t('From order')} ${o.number}${o.notes ? ' — ' + o.notes : ''}`,
+        items: (o.items || []).map(it => ({ product_id: it.product_id || null, description: it.description || '', qty: ctx.num(it.qty), price: ctx.num(it.price) })),
+        order_id: o.id,
+      });
+      const created = S.data.invoices[S.data.invoices.length - 1];
+      o.status = 'fulfilled';
+      o.invoice_id = created ? created.id : null;
+      o.fulfilled_date = ctx.todayStr();
+      S.save();
+      return { order: o, invoice_id: o.invoice_id };
+    },
+  },
+
+  'order-cancel': {
+    view: 'orders',
+    run(ctx, p) {
+      const S = ctx.store;
+      const o = S.data.sales_orders.find(x => x.id === Number(p.id));
+      need(o, 'order not found');
+      need(o.status === 'draft' || o.status === 'confirmed', 'fulfilled orders need a return, not a cancellation');
+      o.status = 'cancelled';
+      S.save();
+      return { order: o };
+    },
+  },
+
+  'order-delete': {
+    view: 'orders',
+    run(ctx, p) {
+      const S = ctx.store;
+      const o = S.data.sales_orders.find(x => x.id === Number(p.id));
+      need(o, 'order not found');
+      need(o.status === 'draft', 'only draft orders can be deleted');
+      S.remove('sales_orders', o.id);
+      return { deleted: o.id };
+    },
+  },
+
+  /* Return: validates quantities against what was sold minus what was
+     already returned, then posts stock-in, revenue+VAT reversal, COGS
+     reversal and the money side — atomically. */
+  'return-create': {
+    view: 'orders',
+    run(ctx, p) {
+      const S = ctx.store;
+      const o = S.data.sales_orders.find(x => x.id === Number(p.id));
+      need(o, 'order not found');
+      need(o.status === 'fulfilled', 'only fulfilled orders can be returned');
+      need(Array.isArray(p.items) && p.items.length > 0, 'items required');
+      for (const it of p.items) {
+        need(ctx.num(it.qty) > 0, 'qty must be positive');
+        if (it.product_id != null) need(S.data.products.some(x => x.id === Number(it.product_id)), 'unknown product in return');
+        const sold = (o.items || []).filter(x => x.product_id === it.product_id).reduce((s, x) => s + ctx.num(x.qty), 0);
+        const back = ctx.returnedQty(o.id, it.product_id);
+        need(ctx.num(it.qty) <= sold - back + 0.0005, `return qty exceeds sold quantity for product ${it.product_id}`);
+      }
+      const row = ctx.applyReturnEffects(o, p.items);
+      return { return: row };
     },
   },
 };

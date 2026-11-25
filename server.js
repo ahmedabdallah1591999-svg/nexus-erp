@@ -43,7 +43,7 @@ const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 /* Collection -> permission view. A user may read/write a collection only if
    their role grants its view (admins: everything). */
 const COLLECTION_VIEW = {
-  contacts: 'contacts', companies: 'companies', deals: 'deals', tasks: 'tasks', quotes: 'quotes',
+  contacts: 'contacts', companies: 'companies', deals: 'deals', tasks: 'tasks', quotes: 'quotes', sales_orders: 'orders', returns: 'orders',
   activities: 'contacts', products: 'products', suppliers: 'suppliers',
   invoices: 'invoices', purchases: 'purchases', ledger: 'finance',
   employees: 'employees', notes: 'notes', accounts: 'accounting', journal: 'accounting', payments: 'payments',
@@ -57,9 +57,9 @@ function emptyDb() {
   return {
     users: [],           // {id, username, salt, hash, role, modules[], mustChange, created_at}
     data: {
-      meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1 },
+      meta: { nextId: 1, invoiceSeq: 1, purchaseSeq: 1, quoteSeq: 1, orderSeq: 1, returnSeq: 1 },
       companies: [], contacts: [], deals: [], tasks: [], activities: [], quotes: [],
-      products: [], suppliers: [], invoices: [], purchases: [],
+      products: [], suppliers: [], invoices: [], purchases: [], sales_orders: [], returns: [],
       ledger: [], employees: [], notes: [], messages: [], accounts: [], journal: [], payments: [],
       warehouses: [], stock_moves: [], settings: {},
     },
@@ -168,7 +168,7 @@ const api = {
       if (!username || password.length < 4) return json(res, 400, { error: 'invalid' });
       const salt = crypto.randomBytes(16).toString('hex');
     const u = { id: 1, username, salt, hash: hashPassword(salt, password), role: 'admin',
-      modules: ['dashboard','contacts','companies','deals','tasks','notes','quotes','invoices','products','stock','purchases','suppliers','finance','accounting','payments','employees','reports','contact'],
+      modules: ['dashboard','contacts','companies','deals','tasks','notes','quotes','orders','invoices','products','stock','purchases','suppliers','finance','accounting','payments','employees','reports','contact'],
       mustChange: false, created_at: new Date().toISOString() };
       db.users.push(u);
       saveJson(DB_FILE, db);

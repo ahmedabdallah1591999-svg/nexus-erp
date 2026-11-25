@@ -73,7 +73,13 @@ function warehouseStock(warehouseId) {
 }
 
 function adjustStock(productId, warehouseId, qty, memo) {
-  return recordStockMove({ product_id: productId, warehouse_id: warehouseId, qty, reason: 'adjustment', memo });
+  const mv = recordStockMove({ product_id: productId, warehouse_id: warehouseId, qty, reason: 'adjustment', memo });
+  /* keep the Inventory GL account in step with the stock ledger */
+  if (mv && typeof postStockAdjustmentJournal === 'function') {
+    ensureCOA();
+    postStockAdjustmentJournal(store.product(productId), qty, memo);
+  }
+  return mv;
 }
 
 function transferStock(productId, fromWh, toWh, qty) {

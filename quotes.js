@@ -128,6 +128,7 @@ function renderQuotes() {
         ${linked ? `<div class="cell-sub">→ ${esc(linked)}</div>` : ''}</td>
       <td class="row-actions">
         ${!q.invoiced_invoice_id ? `<button class="icon-btn" data-act="convert" data-id="${q.id}" title="${t('Convert to invoice')}">🧾</button>` : ''}
+        ${!q.order_id && !q.invoiced_invoice_id ? `<button class="icon-btn" data-act="toorder" data-id="${q.id}" title="${t('Convert to order')}">📦</button>` : ''}
         <button class="icon-btn" data-act="edit" data-id="${q.id}" title="${t('Edit')}">✏️</button>
         <button class="danger-btn" data-act="del" data-id="${q.id}" title="${t('Delete')}">🗑</button>
       </td>
@@ -158,6 +159,7 @@ function renderQuotes() {
     if (!q) return;
     if (btn.dataset.act === 'edit') editQuote(q);
     if (btn.dataset.act === 'convert') convertQuoteToInvoice(q);
+    if (btn.dataset.act === 'toorder') convertQuoteToOrder(q);
     if (btn.dataset.act === 'del') confirmDelete(`${t('Quote')} ${q.number}`, () => {
       if (inServerMode()) { txCall('quote-delete', { id }, t('Quote deleted')); return; }
       store.remove('quotes', id); render();
