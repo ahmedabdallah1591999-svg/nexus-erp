@@ -2,7 +2,7 @@
 
 Every op below runs only through POST /api/tx on the local server (server.js). Server mode checks: session identity, module permission (`view`), server-owned collections written only from the sandboxed transaction, accounting/stock invariants checked before commit, one-at-a-time execution.
 
-Automated adversarial coverage (`matrix-test.py`, 35 checks): P1 a user with no modules gets 403 on all ops; P2 an invoices-only user is refused outside its view; M1-M6 junk payloads (31 shapes incl. Infinity, wrong types, huge arrays) on every op give no 5xx, no data change on a rejected request, invariants hold, no unexpected exception; malformed JSON gives 400; forged PUT meta counters ignored; POS tax from settings only; concurrency: payment, POS same ref, pos-refund, quote-convert, purchase-return, order-fulfill, order return, credit note on refunded POS sale; revalue guards (admin, reason, reviewed amount, concurrency, journal, invariants).
+Automated adversarial coverage (`matrix-test.py`, 35 checks): P1 a user with no modules gets 403 on all 71 ops; P2 an invoices-only user is refused outside its view; M1-M6 junk payloads (31 shapes incl. Infinity, wrong types, huge arrays) on every op give no 5xx, no data change on a rejected request, invariants hold, no unexpected exception; malformed JSON gives 400; forged PUT meta counters ignored; POS tax from settings only; concurrency: payment, POS same ref, pos-refund, quote-convert, purchase-return, order-fulfill, order return, credit note on refunded POS sale; revalue guards (admin, reason, reviewed amount, concurrency, journal, invariants).
 
 Dedicated suites: corr-test (returns/credit notes/refund confirmation), forge-test (forged prices/fields), purchase-test, quality-test, ca-test, preserve-test (no data reset), pkg-test, migration battery.
 
@@ -73,6 +73,12 @@ Dedicated suites: corr-test (returns/credit notes/refund confirmation), forge-te
 | pos-refund | pos | fuzzed in matrix; 403 without module |
 | pos-shift-open | pos | fuzzed in matrix; 403 without module |
 | pos-shift-close | pos | fuzzed in matrix; 403 without module |
+| attendance-delete | employees or hr-self | any-of modules (self-service scoped to own record); fuzzed in matrix; 403 without module |
+| attendance-save | employees or hr-self | any-of modules (self-service scoped to own record); fuzzed in matrix; 403 without module |
+| expense-delete | finance or expenses | any-of modules (self-service scoped to own record); fuzzed in matrix; 403 without module |
+| expense-save | finance or expenses | any-of modules (self-service scoped to own record); fuzzed in matrix; 403 without module |
+| leave-delete | employees or hr-self | any-of modules (self-service scoped to own record); fuzzed in matrix; 403 without module |
+| leave-save | employees or hr-self | any-of modules (self-service scoped to own record); fuzzed in matrix; 403 without module |
 
 ## Not hardened / unsupported (stated honestly)
 - Local single-user browser mode is client-authoritative: the browser can edit its own data. The guards above apply to server mode only.
