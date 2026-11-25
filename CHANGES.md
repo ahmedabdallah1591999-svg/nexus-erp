@@ -47,3 +47,8 @@ Not changed / still open: Windows scripts were reviewed but never run on Windows
 - hotfix8: browser-only mode warning banner at entry; Arabic install/upgrade instructions in deploy/README-AR.md.
 - hotfix9: partial purchase receipts (purchase-receive) with UI, locks while partly received, tests RC1-RC20.
 - hotfix10: partial receipts allocate per line (no catch-all remainder); sub-cent purchases refused; status label shows value.
+
+## hotfix11 (local)
+- credit-note-void and purchase-return-void (admin only, reason >=5 chars). Original stays with status void/who/when/why; its journal is reversed line by line at original amounts; restocked goods are taken back only if still on hand; invoice credited_amount / PO returned_amount adjusted; double-void and concurrent voids guarded.
+- Not voidable: documents that included a confirmed refund (cash moved), since recording money coming back is unsupported.
+- Still open: sales-order return void, credit balances/store credit.

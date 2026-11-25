@@ -13,7 +13,7 @@ Object.assign(I18N.ar, {
   'Put credited goods back in stock':'إرجاع البضاعة المرتجعة إلى المخزون','Yes':'نعم','No':'لا',
   'Money already paid back to the customer? (needed only if they already paid)':'هل رُدّ المبلغ فعلياً للعميل؟ (مطلوب فقط إذا كان قد دفع)','Money already received back from the supplier? (needed only if we already paid)':'هل استُرد المبلغ فعلياً من المورد؟ (مطلوب فقط إذا كنا قد دفعنا)','No, nothing moved':'لا، لم تتحرك أموال','Yes, it was paid back':'نعم، تم الرد','Yes, it was received':'نعم، تم الاستلام','Refund method':'طريقة الرد','Refund reference (transfer / receipt no.)':'مرجع الرد (رقم التحويل / الإيصال)',
   'Credit note posted':'تم ترحيل الإشعار الدائن','Purchase return posted':'تم ترحيل مرتجع المشتريات',
-  'Corrections need the server.':'التصحيحات تحتاج الخادم.','Receive goods':'استلام بضاعة','Partly received (value)':'مستلم جزئياً (بالقيمة)','Quantity received now':'الكمية المستلمة الآن','Left to receive':'المتبقي للاستلام','Goods received':'تم الاستلام','Nothing left to receive':'لا شيء متبقٍ للاستلام','Enter a quantity to receive':'أدخل كمية للاستلام','Browser-only mode: data stays in this browser and nothing is enforced or protected here (no real accounts, permissions, locked accounting or corrections). For the protected mode run server.js.':'وضع المتصفح فقط: البيانات تبقى في هذا المتصفح ولا يوجد هنا أي إلزام أو حماية (لا حسابات حقيقية ولا صلاحيات ولا محاسبة مقفلة ولا تصحيحات). للوضع المحمي شغّل server.js.','Nothing left to credit':'لا شيء متبقٍ للإشعار','Nothing left to return':'لا شيء متبقٍ للإرجاع',
+  'Corrections need the server.':'التصحيحات تحتاج الخادم.','Void':'إلغاء','Voided':'ملغى','Status':'الحالة','Reason for voiding (at least 5 characters)':'سبب الإلغاء (5 أحرف على الأقل)','A void reason of at least 5 characters is required':'سبب الإلغاء مطلوب (5 أحرف على الأقل)','Void this document? The original stays on the record and its posting is reversed.':'إلغاء هذا المستند؟ يبقى الأصل في السجل ويُعكس قيده المحاسبي.','Document voided':'تم إلغاء المستند','Receive goods':'استلام بضاعة','Partly received (value)':'مستلم جزئياً (بالقيمة)','Quantity received now':'الكمية المستلمة الآن','Left to receive':'المتبقي للاستلام','Goods received':'تم الاستلام','Nothing left to receive':'لا شيء متبقٍ للاستلام','Enter a quantity to receive':'أدخل كمية للاستلام','Browser-only mode: data stays in this browser and nothing is enforced or protected here (no real accounts, permissions, locked accounting or corrections). For the protected mode run server.js.':'وضع المتصفح فقط: البيانات تبقى في هذا المتصفح ولا يوجد هنا أي إلزام أو حماية (لا حسابات حقيقية ولا صلاحيات ولا محاسبة مقفلة ولا تصحيحات). للوضع المحمي شغّل server.js.','Nothing left to credit':'لا شيء متبقٍ للإشعار','Nothing left to return':'لا شيء متبقٍ للإرجاع',
   'credited':'مُشعَر دائناً','No credit notes yet.':'لا توجد إشعارات دائنة بعد.','No purchase returns yet.':'لا توجد مرتجعات مشتريات بعد.',
   'Credit':'إشعار','Return to supplier':'إرجاع للمورد','Refunded':'مردود','Applied to balance':'مخصوم من الرصيد','Left to credit':'المتبقي للإشعار','Left to return':'المتبقي للإرجاع',
   'Posts a numbered credit note with its own reversing entries. The invoice is not edited.':'يُرحَّل إشعار دائن مرقم بقيوده العكسية. لا تُعدَّل الفاتورة.',
@@ -98,14 +98,21 @@ function renderCorrections(kind) {
     <td>${esc(isInv ? r.invoice_number : r.purchase_number)}</td>
     <td>${money(r.total)}</td>
     <td><div class="cell-sub">${t('Applied to balance')} ${money(isInv ? r.applied_to_receivable : r.applied_to_payable)}</div>${r.refunded > 0 ? `<div class="cell-sub">${t('Refunded')} ${money(r.refunded)} (${esc(r.refund_method)})</div>` : ''}</td>
-    <td>${esc(r.reason)}</td></tr>`).join('');
+    <td>${esc(r.reason)}</td>
+    <td>${r.status === 'void' ? `<span class="badge lost">${t('Voided')}</span><div class="cell-sub">${esc(r.void_reason || '')}</div>` : ((typeof Auth !== 'undefined' && Auth.current && Auth.current.role === 'admin' && inServerMode()) ? `<button class="ghost-btn" data-void="${r.id}">${t('Void')}</button>` : '')}</td></tr>`).join('');
   const div = document.createElement('div');
   div.className = 'card';
   div.style.marginTop = '14px';
   div.innerHTML = `<div class="lines-head" style="margin-bottom:8px"><h3>${t(isInv ? 'Credit notes' : 'Purchase returns')}</h3></div>
-    <div class="table-wrap"><table class="data"><thead><tr><th>#</th><th>${t(isInv ? 'Invoice' : 'PO')}</th><th>${t('Total')}</th><th>${t('Settlement')}</th><th>${t('Reason')}</th></tr></thead>
-    <tbody>${body || `<tr><td colspan="5" class="empty-state">${t(isInv ? 'No credit notes yet.' : 'No purchase returns yet.')}</td></tr>`}</tbody></table></div>`;
+    <div class="table-wrap"><table class="data"><thead><tr><th>#</th><th>${t(isInv ? 'Invoice' : 'PO')}</th><th>${t('Total')}</th><th>${t('Settlement')}</th><th>${t('Reason')}</th><th>${t('Status')}</th></tr></thead>
+    <tbody>${body || `<tr><td colspan="6" class="empty-state">${t(isInv ? 'No credit notes yet.' : 'No purchase returns yet.')}</td></tr>`}</tbody></table></div>`;
   host.appendChild(div);
+  div.querySelectorAll('[data-void]').forEach(b => b.addEventListener('click', () => {
+    const reason = window.prompt(t('Reason for voiding (at least 5 characters)'));
+    if (!reason || reason.trim().length < 5) { toast(t('A void reason of at least 5 characters is required')); return; }
+    if (!window.confirm(t('Void this document? The original stays on the record and its posting is reversed.'))) return;
+    txCall(isInv ? 'credit-note-void' : 'purchase-return-void', { id: Number(b.dataset.void), reason: reason.trim() }, t('Document voided'));
+  }));
 }
 
 

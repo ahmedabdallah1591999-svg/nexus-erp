@@ -1286,6 +1286,73 @@ const OPS = {
     },
   },
 
+  /* Void a posted credit note or purchase return. The original stays on the record (status 'void'
+     with who, when and why); its journal is reversed line by line at the ORIGINAL amounts, and its
+     stock effect is undone only when the goods can actually be taken back. A document that moved
+     money (a confirmed refund) cannot be voided here: that would need the money recorded coming
+     back, which is not supported, so it is rejected. Admin only. */
+  'credit-note-void': {
+    view: 'invoices',
+    run(ctx, p, user) {
+      need(user && user.role === 'admin', 'only an admin can void a credit note');
+      const S = ctx.store, r2 = v => Math.round(v * 100) / 100;
+      const cn = (S.data.credit_notes || []).find(x => x.id === Number(p.id));
+      need(cn, 'credit note not found');
+      need(cn.status === 'posted', 'this credit note is not active (already void)');
+      need(String(p.reason || '').trim().length >= 5, 'a void reason of at least 5 characters is required');
+      need(ctx.num(cn.refunded) < 0.005, 'this credit note included a confirmed refund of money; voiding it would need that money recorded as returned, which is not supported yet');
+      const inv = S.data.invoices.find(i => i.id === cn.invoice_id);
+      need(inv && ['sent', 'paid'].includes(inv.status) && inv.journal_sent, 'the invoice is no longer in a state that can take this credit note back');
+      const back = (cn.items || []).filter(it => it.restock && it.product_id != null);
+      const need2 = {};
+      for (const it of back) need2[it.product_id] = (need2[it.product_id] || 0) + ctx.num(it.qty);
+      for (const [pid, q] of Object.entries(need2)) {
+        const pr = S.data.products.find(x => x.id === Number(pid));
+        need(pr && ctx.num(pr.stock) >= q, `cannot void: the ${q} unit(s) of ${pr ? pr.name : pid} put back in stock by this credit note are no longer on hand`);
+      }
+      const rev = (ref_type, memo) => {
+        const orig = S.data.journal.filter(j => j.ref_type === ref_type && j.ref_id === cn.id);
+        need(orig.length === 1, `the original ${ref_type} posting was not found exactly once; review it manually`);
+        need(ctx.postJournal({ date: ctx.todayStr(), memo, ref_type: ref_type + '-void', ref_id: cn.id,
+          lines: orig[0].lines.map(l => ({ account_id: l.account_id, debit: l.credit, credit: l.debit })) }), 'reversal could not be posted');
+      };
+      rev('credit_note', `Void of credit note ${cn.number}: ${String(p.reason).trim()}`);
+      if (back.length) {
+        if (S.data.journal.some(j => j.ref_type === 'credit_note-cogs' && j.ref_id === cn.id)) rev('credit_note-cogs', `Void of COGS reversal for ${cn.number}`);
+        ctx.applyStock(back.map(it => ({ product_id: it.product_id, qty: it.qty })), -1, { reason: 'credit-note-void', ref_type: 'credit_note', ref_id: cn.id });
+      }
+      inv.credited_amount = Math.max(0, r2(ctx.num(inv.credited_amount) - ctx.num(cn.total)));
+      Object.assign(cn, { status: 'void', void_reason: String(p.reason).trim(), voided_by: user.username, voided_at: new Date().toISOString() });
+      S.save();
+      return { credit_note: cn };
+    },
+  },
+  'purchase-return-void': {
+    view: 'purchases',
+    run(ctx, p, user) {
+      need(user && user.role === 'admin', 'only an admin can void a purchase return');
+      const S = ctx.store, r2 = v => Math.round(v * 100) / 100;
+      const pr = (S.data.purchase_returns || []).find(x => x.id === Number(p.id));
+      need(pr, 'purchase return not found');
+      need(pr.status === 'posted', 'this purchase return is not active (already void)');
+      need(String(p.reason || '').trim().length >= 5, 'a void reason of at least 5 characters is required');
+      need(ctx.num(pr.refunded) < 0.005, 'this return included a confirmed supplier refund; voiding it would need that money recorded as sent back, which is not supported yet');
+      const po = S.data.purchases.find(x => x.id === pr.purchase_id);
+      need(po && po.status === 'received', 'the purchase is no longer in a state that can take this return back');
+      const orig = S.data.journal.filter(j => j.ref_type === 'purchase_return' && j.ref_id === pr.id);
+      need(orig.length === 1, 'the original purchase return posting was not found exactly once; review it manually');
+      need(ctx.postJournal({ date: ctx.todayStr(), memo: `Void of purchase return ${pr.number}: ${String(p.reason).trim()}`, ref_type: 'purchase_return-void', ref_id: pr.id,
+        lines: orig[0].lines.map(l => ({ account_id: l.account_id, debit: l.credit, credit: l.debit })) }), 'reversal could not be posted');
+      const stockItems = (pr.items || []).filter(it => it.product_id != null).map(it => ({ product_id: it.product_id, qty: it.qty }));
+      if (stockItems.length) ctx.applyStock(stockItems, +1, { reason: 'purchase-return-void', ref_type: 'purchase_return', ref_id: pr.id });
+      S.add('ledger', { date: ctx.todayStr(), type: 'expense', category: 'Purchase return void', amount: r2(ctx.num(pr.total)), ref_type: 'purchase_return', ref_id: pr.id, memo: `${pr.number} voided` });
+      po.returned_amount = Math.max(0, r2(ctx.num(po.returned_amount) - ctx.num(pr.total)));
+      Object.assign(pr, { status: 'void', void_reason: String(p.reason).trim(), voided_by: user.username, voided_at: new Date().toISOString() });
+      S.save();
+      return { purchase_return: pr };
+    },
+  },
+
   'purchase-return-create': {
     view: 'purchases',
     run(ctx, p, user) {
