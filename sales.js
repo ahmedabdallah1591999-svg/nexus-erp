@@ -13,7 +13,9 @@ function purchaseTotal(po) {
   return (po.items || []).reduce((s, it) => s + num(it.qty) * num(it.cost), 0);
 }
 function invoiceDisplayStatus(inv) {
+  if (inv.status === 'paid') return 'paid';
   if (inv.status === 'sent' && inv.due_date && inv.due_date < todayStr()) return 'overdue';
+  if (inv.status !== 'draft' && typeof invoicePaidAmount === 'function' && invoicePaidAmount(inv) > 0.005) return 'partial';
   return inv.status;
 }
 
@@ -317,7 +319,12 @@ function saveInvoice(existing, out) {
       if (postInvoiceSentJournal(inv)) inv.journal_sent = true;
     }
     if (inv.status === 'paid' && !inv.journal_paid) {
-      if (postInvoicePaidJournal(inv)) inv.journal_paid = true;
+      inv.journal_paid = true;
+      /* settlement posts through recordPayment (per-payment journal),
+         never as one full-total entry, so partial payments never double-post */
+      if (typeof recordPayment === 'function' && invoiceOpenAmount(inv) > 0.005) {
+        recordPayment({ direction: 'in', ref_type: 'invoice', ref_id: inv.id, amount: invoiceOpenAmount(inv), method: 'cash', date: todayStr() });
+      }
     }
   }
   // paid invoices post income to the ledger once

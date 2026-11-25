@@ -335,6 +335,21 @@ function exportSheets() {
   });
 
   sheets.push({
+    name: t('Payments'),
+    view: 'payments',
+    rows: [[t('Date'), t('Direction'), t('Party'), t('Reference'), t('Amount'), t('Method'), t('Memo')],
+      ...(d.payments || []).map(p => {
+        const party = p.direction === 'in'
+          ? (((d.contacts || []).find(c => c.id === p.contact_id) || {}).name || '')
+          : (((d.suppliers || []).find(s => s.id === p.supplier_id) || {}).name || '');
+        const ref = p.ref_type === 'invoice'
+          ? (((d.invoices || []).find(i => i.id === p.ref_id) || {}).number || '')
+          : (((d.purchases || []).find(x => x.id === p.ref_id) || {}).number || '');
+        return [p.date || '', t(p.direction === 'in' ? 'incoming' : 'outgoing'), party, ref, p.amount, t(p.method || 'cash'), p.memo || ''];
+      })],
+  });
+
+  sheets.push({
     name: t('Companies'),
     view: 'companies',
     rows: [[t('Company name'), t('Industry'), t('Email'), t('Phone'), t('Website'), t('Address'), t('Notes')],
