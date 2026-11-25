@@ -45,7 +45,7 @@ const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const COLLECTION_VIEW = {
   contacts: 'contacts', companies: 'companies', deals: 'deals', tasks: 'tasks', quotes: 'quotes', projects: 'projects', timesheets: 'projects', sales_orders: 'orders', returns: 'orders',
   tickets: 'helpdesk', ticket_replies: 'helpdesk',
-  leave_requests: 'employees', attendance: 'employees',
+  leave_requests: ['employees', 'hr-self'], attendance: ['employees', 'hr-self'],
   activities: 'contacts', products: 'products', suppliers: 'suppliers',
   invoices: 'invoices', purchases: 'purchases', ledger: 'finance', expenses: ['finance', 'expenses'], recurring: 'invoices',
   employees: 'employees', notes: 'notes', accounts: 'accounting', journal: 'accounting', payments: 'payments',
@@ -122,7 +122,7 @@ function checkPassword(user, password) {
 /* ---------------- helpers ---------------- */
 
 function publicUser(u) {
-  return { id: u.id, username: u.username, role: u.role, modules: u.modules || [], mustChange: !!u.mustChange };
+  return { id: u.id, username: u.username, role: u.role, modules: u.modules || [], mustChange: !!u.mustChange, employee_id: u.employee_id || null };
 }
 
 function canView(user, view) {
@@ -145,6 +145,15 @@ function dataFor(user) {
      books stay with finance reviewers */
   if (out.expenses && !canView(user, 'finance')) {
     out.expenses = out.expenses.filter(e => e.submitted_by === user.username);
+  }
+  /* HR self-service: without the employees (HR review) module a user only
+     ever receives their own leave requests and their own attendance —
+     matched through the admin-linked employee record, never a client id */
+  if (out.leave_requests && !canView(user, 'employees')) {
+    out.leave_requests = out.leave_requests.filter(x => x.requested_by === user.username);
+  }
+  if (out.attendance && !canView(user, 'employees')) {
+    out.attendance = out.attendance.filter(a => a.employee_id != null && a.employee_id === user.employee_id);
   }
   if (user.role === 'admin') {
     out.messages = d.messages;
@@ -316,6 +325,7 @@ const api = {
     const u = { id: db.users.reduce((m, x) => Math.max(m, x.id), 0) + 1, username,
       salt, hash: hashPassword(salt, password), role: b.role === 'admin' ? 'admin' : 'employee',
       modules: Array.isArray(b.modules) ? b.modules.filter(m => typeof m === 'string') : [],
+      employee_id: b.employee_id && db.data.employees.some(e => e.id === Number(b.employee_id)) ? Number(b.employee_id) : null,
       mustChange: true, created_at: new Date().toISOString() };
     db.users.push(u); saveJson(DB_FILE, db);
     json(res, 200, { user: publicUser(u) });
@@ -335,6 +345,7 @@ const api = {
     }
     if (user.role === 'admin') {
       if (Array.isArray(b.modules)) target.modules = b.modules.filter(m => typeof m === 'string');
+      if (b.employee_id !== undefined) target.employee_id = b.employee_id && db.data.employees.some(e => e.id === Number(b.employee_id)) ? Number(b.employee_id) : null;
       if (b.role && isSelf === false) target.role = b.role === 'admin' ? 'admin' : 'employee';
     }
     saveJson(DB_FILE, db);

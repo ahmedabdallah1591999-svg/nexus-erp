@@ -24,7 +24,7 @@ const VIEW_LABELS = {
   quotes: 'Quotes', orders: 'Sales orders', accounting: 'Accounting', payments: 'Payments', stock: 'Stock ledger',
   tasks: 'Tasks', notes: 'Notes', invoices: 'Invoices', products: 'Inventory', projects: 'Projects',
   purchases: 'Purchases', suppliers: 'Suppliers', finance: 'Finance', expenses: 'Expense requests', employees: 'Employees',
-  reports: 'Reports', contact: 'Contact us', helpdesk: 'Helpdesk',
+  reports: 'Reports', contact: 'Contact us', helpdesk: 'Helpdesk', 'hr-self': 'My HR',
 };
 
 /* ---------------- Data layer ---------------- */

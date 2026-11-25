@@ -57,7 +57,7 @@ h1, h2, h3 { margin: 0; }
   color: #fff; font-weight: 700; display: grid; place-items: center;
 }
 .brand-name { color: #fff; font-weight: 650; letter-spacing: .2px; }
-.nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; min-height: 0; scrollbar-width: thin; }
 .nav-item {
   display: flex; align-items: center; gap: 10px;
   background: none; border: 0; color: #cbd5e1;

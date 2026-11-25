@@ -6,12 +6,17 @@
 
 const LEAVE_TYPES = ['annual', 'sick', 'unpaid'];
 
+const isSelfService = () => {
+  const me = (typeof Auth !== 'undefined' && Auth.current) || null;
+  return !!(me && me.role !== 'admin' && !(me.modules || []).includes('employees'));
+};
+
 const leaveFields = row => [
-  {
+  ...(isSelfService() ? [] : [{
     key: 'employee_id', label: t('Employee'), type: 'select', required: true,
     options: store.data.employees.map(e => ({ value: e.id, label: e.name })),
     value: row?.employee_id || (store.data.employees[0] && store.data.employees[0].id),
-  },
+  }]),
   {
     key: 'type', label: t('Leave type'), type: 'select',
     options: LEAVE_TYPES.map(v => ({ value: v, label: t(v) })),
@@ -23,9 +28,9 @@ const leaveFields = row => [
 ];
 
 function editLeave(row) {
-  if (!store.data.employees.length) { alert(t('No employees yet.')); return; }
+  if (!isSelfService() && !store.data.employees.length) { alert(t('No employees yet.')); return; }
   openModal(row ? t('Edit leave request') : t('Request time off'), leaveFields(row), out => {
-    out.employee_id = Number(out.employee_id);
+    if (isSelfService()) delete out.employee_id; else out.employee_id = Number(out.employee_id);
     if (inServerMode()) { txCall('leave-save', { id: row && row.id, out }, t('Leave request saved')); return; }
     const days = Math.round((new Date(out.to_date) - new Date(out.from_date)) / 86400000) + 1;
     if (row) Object.assign(row, out, { days });
@@ -35,11 +40,11 @@ function editLeave(row) {
 }
 
 const attendanceFields = row => [
-  {
+  ...(isSelfService() ? [] : [{
     key: 'employee_id', label: t('Employee'), type: 'select', required: true,
     options: store.data.employees.map(e => ({ value: e.id, label: e.name })),
     value: row?.employee_id || (store.data.employees[0] && store.data.employees[0].id),
-  },
+  }]),
   { key: 'date', label: t('Date'), type: 'date', required: true, value: row?.date || todayStr() },
   { key: 'check_in', label: t('Check-in (HH:MM)'), value: row?.check_in || '' },
   { key: 'check_out', label: t('Check-out (HH:MM)'), value: row?.check_out || '' },
@@ -47,16 +52,18 @@ const attendanceFields = row => [
 ];
 
 function editAttendance(row) {
-  if (!store.data.employees.length) { alert(t('No employees yet.')); return; }
+  if (!isSelfService() && !store.data.employees.length) { alert(t('No employees yet.')); return; }
   openModal(row ? t('Correct attendance') : t('Record attendance'), attendanceFields(row), out => {
-    out.employee_id = Number(out.employee_id);
+    if (isSelfService()) delete out.employee_id; else out.employee_id = Number(out.employee_id);
     if (inServerMode()) { txCall('attendance-save', { out }, t('Attendance saved')); return; }
     const HHMM = v => /^([01]?\d|2[0-3]):[0-5]\d$/.test(v || '');
     let hours = 0;
     if (HHMM(out.check_in) && HHMM(out.check_out)) {
       const [h1, m1] = out.check_in.split(':').map(Number);
       const [h2, m2] = out.check_out.split(':').map(Number);
-      hours = Math.max(0, Math.round(((h2 * 60 + m2) - (h1 * 60 + m1)) / 6) / 10);
+      let mins = (h2 * 60 + m2) - (h1 * 60 + m1);
+      if (mins < 0) mins += 24 * 60;
+      hours = Math.round(mins / 6) / 10;
     }
     const existing = (store.data.attendance || []).find(a => a.employee_id === out.employee_id && a.date === out.date);
     if (existing) Object.assign(existing, out, { hours });
@@ -69,7 +76,7 @@ function renderHrSections() {
   const host = document.querySelector('#hrSections');
   if (!host) return;
   const me = (typeof Auth !== 'undefined' && Auth.current) || null;
-  const empName = id => { const e = store.data.employees.find(x => x.id === id); return e ? e.name : '—'; };
+  const empName = id => { const e = (store.data.employees || []).find(x => x.id === id); if (e) return e.name; return me && me.employee_id === id ? me.username : '—'; };
 
   const leaves = (store.data.leave_requests || []).slice().sort((a, b) => b.id - a.id);
   const lRows = leaves.map(lr => {
@@ -156,3 +163,17 @@ function renderHrSections() {
     });
   });
 }
+
+/* Self-service page for users with hr-self but not the employees module:
+   own leave requests and own attendance only (server already row-scopes). */
+function renderHrSelf() {
+  const host = document.querySelector('#view-hr-self');
+  if (!host) return;
+  host.innerHTML = `
+    <div class="view-head">
+      <div><h2>${t('My HR')}</h2><div class="sub">${t('Your leave requests and attendance.')}</div></div>
+    </div>
+    <div id="hrSections"></div>`;
+  renderHrSections();
+}
+App.views['hr-self'] = renderHrSelf;

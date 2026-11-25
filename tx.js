@@ -962,10 +962,17 @@ const OPS = {
 
   /* ---------------- HR: time off + attendance ---------------- */
   'leave-save': {
-    view: 'employees',
+    view: ['employees', 'hr-self'],
     run(ctx, p, user) {
       const S = ctx.store;
       const out = p.out || {};
+      /* self-service users are bound to their admin-linked employee record:
+         a caller-chosen employee_id cannot bypass the own-approval rule */
+      const selfOnly = user.role !== 'admin' && !(user.modules || []).includes('employees');
+      if (selfOnly) {
+        need(user.employee_id, 'no employee record linked to this account');
+        out.employee_id = user.employee_id;
+      }
       const emp = (S.data.employees || []).find(e => e.id === Number(out.employee_id));
       need(emp, 'employee not found');
       need(['annual', 'sick', 'unpaid'].includes(out.type), 'unknown leave type');
@@ -1016,7 +1023,7 @@ const OPS = {
     },
   },
   'leave-delete': {
-    view: 'employees',
+    view: ['employees', 'hr-self'],
     run(ctx, p, user) {
       const S = ctx.store;
       const lr = (S.data.leave_requests || []).find(x => x.id === Number(p.id));
@@ -1029,22 +1036,31 @@ const OPS = {
     },
   },
   'attendance-save': {
-    view: 'employees',
+    view: ['employees', 'hr-self'],
     run(ctx, p, user) {
       const S = ctx.store;
       const out = p.out || {};
+      const selfOnly = user.role !== 'admin' && !(user.modules || []).includes('employees');
+      if (selfOnly) {
+        need(user.employee_id, 'no employee record linked to this account');
+        out.employee_id = user.employee_id;
+      }
       const emp = (S.data.employees || []).find(e => e.id === Number(out.employee_id));
       need(emp, 'employee not found');
       need(/^\d{4}-\d{2}-\d{2}$/.test(out.date || ''), 'date required');
       const HHMM = v => /^([01]?\d|2[0-3]):[0-5]\d$/.test(v || '');
       need(!out.check_in || HHMM(out.check_in), 'check-in must be HH:MM');
       need(!out.check_out || HHMM(out.check_out), 'check-out must be HH:MM');
-      /* hours are computed server-side; a client-sent hours field is ignored */
+      /* hours are computed server-side; a client-sent hours field is
+         ignored. Overnight shifts (check-out earlier than check-in) count
+         past midnight instead of silently zeroing out. */
       let hours = 0;
       if (HHMM(out.check_in) && HHMM(out.check_out)) {
         const [h1, m1] = out.check_in.split(':').map(Number);
         const [h2, m2] = out.check_out.split(':').map(Number);
-        hours = Math.max(0, Math.round(((h2 * 60 + m2) - (h1 * 60 + m1)) / 6) / 10);
+        let mins = (h2 * 60 + m2) - (h1 * 60 + m1);
+        if (mins < 0) mins += 24 * 60;
+        hours = Math.round(mins / 6) / 10;
       }
       /* one record per employee per day: saving again corrects it */
       const existing = (S.data.attendance || []).find(a => a.employee_id === emp.id && a.date === out.date);
@@ -1063,7 +1079,7 @@ const OPS = {
     },
   },
   'attendance-delete': {
-    view: 'employees',
+    view: ['employees', 'hr-self'],
     run(ctx, p, user) {
       const S = ctx.store;
       const a = (S.data.attendance || []).find(x => x.id === Number(p.id));
