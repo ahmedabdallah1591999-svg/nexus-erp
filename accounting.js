@@ -278,6 +278,26 @@ function inventoryValuationViolations() {
   return out;
 }
 
+/* Legacy settlement mismatches: incoming payments whose method says
+   bank/transfer/card but whose journal debited the cash account (pre-fix
+   postings). Surfaced for review — aligning them is an explicit admin
+   decision, never automatic; refunded ones net to zero and are skipped. */
+function settlementMismatches() {
+  const cash = accountByCode('1000');
+  if (!cash) return [];
+  const refunded = new Set((store.data.payments || []).filter(o => o.direction === 'out').map(o => o.ref_type + ':' + o.ref_id));
+  const out = [];
+  for (const p of (store.data.payments || [])) {
+    if (p.direction !== 'in' || p.reclassed || refunded.has(p.ref_type + ':' + p.ref_id)) continue;
+    if (!['bank', 'transfer', 'card'].includes(p.method)) continue;
+    const j = (store.data.journal || []).find(x => x.id === p.journal_id);
+    if (!j) continue;
+    const debitLine = (j.lines || []).find(l => num(l.debit) > 0 && l.account_id === cash.id);
+    if (debitLine) out.push({ payment: p, amount: num(debitLine.debit) });
+  }
+  return out;
+}
+
 /* Upgrade migration for data created before inventory postings existed
    (opening stock, COGS, adjustments). We never rewrite or fabricate
    per-document history: one clearly-labelled alignment entry against
@@ -360,6 +380,17 @@ function renderAccounting() {
     </div>`;
   }
 
+  const mismatches = typeof settlementMismatches === 'function' ? settlementMismatches() : [];
+  const mismatchTotal = Math.round(mismatches.reduce((s, m) => s + m.amount, 0) * 100) / 100;
+  const isAdmin2 = Auth.current && Auth.current.role === 'admin';
+  const reclassCard = mismatches.length ? `<div class="card" style="border-color:var(--yellow, #d97706)">
+    <h3>${t('Legacy settlement review')}</h3>
+    <p>${mismatches.length} ${t('payment(s) recorded as bank/transfer/card were posted to the cash account before the settlement fix')} — ${t('total')} <strong>${money(mismatchTotal)}</strong>.</p>
+    <p class="cell-sub">${t('Review where the money actually arrived, then approve a dated reclass to the bank account (Dr 1010 / Cr 1000). Original entries stay untouched; refunds of these sales stay blocked until the review.')}</p>
+    ${isAdmin2 ? `<button class="primary-btn" id="approveReclass">${t('Approve and post reclass')}</button>`
+               : `<p><strong>${t('Waiting for an admin to review and approve.')}</strong></p>`}
+  </div>` : '';
+
   const coaRows = store.data.accounts.map(a => `
     <tr><td>${esc(a.code)}</td><td>${esc(a.name)}</td><td><span class="badge inactive">${t(a.type)}</span></td>
     <td>${money(naturalBalance(a))}</td></tr>`).join('');
@@ -395,6 +426,7 @@ function renderAccounting() {
     </div>
     ${violations.length ? `<div class="card" style="border-color:var(--red)"><h3>${t('Integrity violations')}</h3><ul>${violations.map(v => `<li>${esc(v)}</li>`).join('')}</ul></div>` : ''}
     ${reconCard}
+    ${reclassCard}
     <div class="card"><h3>${t('Chart of accounts')}</h3>
       <div class="table-wrap"><table class="data">
         <thead><tr><th>${t('Code')}</th><th>${t('Account')}</th><th>${t('Type')}</th><th>${t('Balance')}</th></tr></thead>
@@ -405,6 +437,11 @@ function renderAccounting() {
         <tbody>${journalRows || `<tr><td colspan="5" class="empty-state">${t('No journal entries yet.')}</td></tr>`}</tbody></table></div></div>`;
 
   $('#addJournal').onclick = addJournalEntry;
+  const rcBtn = $('#approveReclass');
+  if (rcBtn) rcBtn.onclick = () => {
+    if (inServerMode()) { txCall('reclass-settlement', { all: true }, t('Reclass posted — settlements aligned')); return; }
+    toast(t('Reclass needs the server.'));
+  };
   const apBtn = $('#approveInvAdj');
   if (apBtn) apBtn.onclick = () => {
     if (inServerMode()) { txCall('migrate-inventory', {}, t('Adjustment posted — books reconciled')); return; }

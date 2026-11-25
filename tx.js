@@ -1391,24 +1391,26 @@ const OPS = {
         { account_id: ctx.accountByCode('4000').id, debit: sub },
       ];
       if (tax > 0) lines.push({ account_id: ctx.accountByCode('2100').id, debit: tax });
-      /* The reversal credits the account the ORIGINAL payment journal
-         actually debited — a pre-fix bank/transfer sale booked into 1000
-         must come back out of 1000, or the books keep a phantom balance.
-         The actual payout method is recorded on the refund payment row for
-         the audit trail; aligning old misclassified postings to the bank
-         account is a separate, reviewed reclass decision. */
-      let settleCode = ['bank', 'transfer', 'card'].includes(method) ? '1010' : '1000';
+      /* The money leaves from where it is ACTUALLY paid out — the payout
+         method (default: the sale's own method) picks the account.
+         Ambiguous legacy sales are blocked instead: a pre-fix sale whose
+         method says bank/transfer/card but whose payment was booked into
+         the till (1000) means we cannot know where the money really is.
+         An admin must review and post the settlement reclass first — the
+         reclass fixes the original posting, then the refund pays out
+         normally. No silent reclassification, no memo contradicting the
+         journal. */
       const origPay = (S.data.payments || []).find(pay => pay.ref_type === 'invoice' && Number(pay.ref_id) === inv.id && pay.direction === 'in' && pay.journal_id);
-      if (origPay) {
+      if (origPay && !origPay.reclassed) {
         const oj = (S.data.journal || []).find(j => j.id === origPay.journal_id);
         const arId = ctx.accountByCode('1100').id;
+        const cashId = ctx.accountByCode('1000').id;
         const debitLine = oj && (oj.lines || []).find(l => ctx.num(l.debit) > 0 && l.account_id !== arId);
-        const origAcc = debitLine && (S.data.accounts || []).find(a => a.id === debitLine.account_id);
-        if (origAcc) settleCode = origAcc.code;
-        /* an approved reclass moved the money to the bank account after the
-           fact — then the refund leaves from there */
-        if (origPay.reclassed) settleCode = '1010';
+        const bookedCash = debitLine && debitLine.account_id === cashId;
+        const methodNonCash = ['bank', 'transfer', 'card'].includes(origPay.method || inv.pos_method);
+        need(!(bookedCash && methodNonCash), 'legacy settlement mismatch: sale booked to cash but paid by ' + (origPay.method || inv.pos_method) + ' — an admin must review the settlement reclass in Accounting before refunding');
       }
+      const settleCode = ['bank', 'transfer', 'card'].includes(method) ? '1010' : '1000';
       lines.push({ account_id: ctx.accountByCode(settleCode).id, credit: total });
       if (cogs > 0) {
         lines.push({ account_id: ctx.accountByCode('1200').id, debit: cogs });
