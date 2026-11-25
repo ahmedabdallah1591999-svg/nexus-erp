@@ -16,7 +16,7 @@ function invoicePaidAmount(inv) {
    plus sales-order returns recorded against it. Derived from the returns
    already stored, so old data needs no migration and no history is rewritten. */
 function invoiceCreditedTotal(inv) {
-  const rets = (store.data.returns || []).filter(r => r.invoice_id === inv.id).reduce((s, r) => s + num(r.amount), 0);
+  const rets = (store.data.returns || []).filter(r => r.invoice_id === inv.id && r.status !== 'void').reduce((s, r) => s + num(r.amount), 0);
   return Math.round((num(inv.credited_amount) + rets) * 100) / 100;
 }
 function invoiceNetTotal(inv) {

@@ -25,7 +25,7 @@ function orderTotal(o) { return invoiceTotal(o); } // same shape: items + tax_ra
 /* Quantity of a product already returned against an order. */
 function returnedQty(orderId, productId) {
   return (store.data.returns || [])
-    .filter(r => r.order_id === orderId)
+    .filter(r => r.order_id === orderId && r.status !== 'void')
     .reduce((s, r) => s + (r.items || []).filter(it => it.product_id === productId)
       .reduce((x, it) => x + num(it.qty), 0), 0);
 }
@@ -230,7 +230,7 @@ function returnReviewFlags(r) {
     const sold = {};
     (o.items || []).forEach(x => { const k = x.product_id || 'n'; sold[k] = (sold[k] || 0) + num(x.qty); });
     const back = {};
-    (store.data.returns || []).filter(x => x.order_id === o.id).forEach(x => (x.items || []).forEach(it => { const k = it.product_id || 'n'; back[k] = (back[k] || 0) + num(it.qty); }));
+    (store.data.returns || []).filter(x => x.order_id === o.id && x.status !== 'void').forEach(x => (x.items || []).forEach(it => { const k = it.product_id || 'n'; back[k] = (back[k] || 0) + num(it.qty); }));
     if (Object.keys(back).some(k => back[k] > (sold[k] || 0) + 0.0005)) flags.push('returned more than sold');
   }
   const j = (store.data.journal || []).find(x => x.ref_type === 'return' && x.ref_id === r.id);
@@ -321,7 +321,8 @@ function renderOrders() {
     <td><div class="cell-main">${esc(r.number)}</div><div class="cell-sub">${esc(r.date || '')}</div></td>
     <td>${esc((store.data.sales_orders.find(o => o.id === r.order_id) || {}).number || '')}</td>
     <td>${(r.items || []).map(it => { const p = it.product_id ? store.product(it.product_id) : null; return `${esc(p ? p.name : it.description || '')} × ${num(it.qty)}`; }).join(', ')}</td>
-    <td class="num">${money(r.amount || 0)}${returnReviewFlags(r).length ? `<div class="cell-sub" style="color:#b45309">⚠ ${t('Needs review')}: ${returnReviewFlags(r).map(f => t(f)).join('; ')}</div>` : ''}${r.refund_reference ? `<div class="cell-sub">${t('Refund reference (transfer / receipt no.)')}: ${esc(r.refund_reference)}</div>` : ''}</td></tr>`).join('');
+    <td class="num">${money(r.amount || 0)}${returnReviewFlags(r).length ? `<div class="cell-sub" style="color:#b45309">⚠ ${t('Needs review')}: ${returnReviewFlags(r).map(f => t(f)).join('; ')}</div>` : ''}${r.refund_reference ? `<div class="cell-sub">${t('Refund reference (transfer / receipt no.)')}: ${esc(r.refund_reference)}</div>` : ''}</td>
+    <td>${r.status === 'void' ? `<span class="status-badge status-cancelled">${t('Voided')}</span><div class="cell-sub">${esc(r.void_reason || '')}</div>` : ((Auth.current && Auth.current.role === 'admin' && inServerMode()) ? `<button class="mini-btn danger" data-voidret="${r.id}">${t('Void')}</button>` : '')}</td></tr>`).join('');
 
   $('#view-orders').innerHTML = `
     <div class="view-head">
@@ -332,10 +333,16 @@ function renderOrders() {
       <thead><tr><th>${t('Order')}</th><th>${t('Customer')}</th><th>${t('Status')}</th><th>${t('Total')}</th><th>${t('Invoice')}</th><th></th></tr></thead>
       <tbody>${body || `<tr><td colspan="6" class="empty-state">${t('No orders yet.')}</td></tr>`}</tbody></table></div></div>
     <div class="card"><h3>${t('Returns')}</h3><div class="table-wrap"><table class="data">
-      <thead><tr><th>${t('Return')}</th><th>${t('Order')}</th><th>${t('Items')}</th><th>${t('Amount')}</th></tr></thead>
-      <tbody>${retBody || `<tr><td colspan="4" class="empty-state">${t('No returns yet.')}</td></tr>`}</tbody></table></div></div>`;
+      <thead><tr><th>${t('Return')}</th><th>${t('Order')}</th><th>${t('Items')}</th><th>${t('Amount')}</th><th></th></tr></thead>
+      <tbody>${retBody || `<tr><td colspan="5" class="empty-state">${t('No returns yet.')}</td></tr>`}</tbody></table></div></div>`;
 
   $('#addOrder').onclick = () => editOrder(null);
+  $('#view-orders').querySelectorAll('[data-voidret]').forEach(b => b.onclick = () => {
+    const reason = window.prompt(t('Reason for voiding (at least 5 characters)'));
+    if (!reason || reason.trim().length < 5) { toast(t('A void reason of at least 5 characters is required')); return; }
+    if (!window.confirm(t('Void this document? The original stays on the record and its posting is reversed.'))) return;
+    txCall('return-void', { id: Number(b.dataset.voidret), reason: reason.trim() }, t('Document voided'));
+  });
   $('#view-orders').querySelectorAll('button[data-act]').forEach(btn => {
     btn.onclick = () => {
       const id = Number(btn.dataset.id);

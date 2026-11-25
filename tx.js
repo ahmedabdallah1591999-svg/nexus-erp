@@ -127,7 +127,7 @@ function confirmedRefund(ctx, p, excess, who, side) {
 function creditedProductQty(S, inv, pid) {
   let q = 0;
   for (const cn of (S.data.credit_notes || []).filter(x => x.invoice_id === inv.id && x.status !== 'void')) for (const it of cn.items) if ((it.product_id == null ? null : Number(it.product_id)) === pid) q += Number(it.qty);
-  for (const r of (S.data.returns || []).filter(x => x.invoice_id === inv.id)) for (const it of (r.items || [])) if ((it.product_id == null ? null : Number(it.product_id)) === pid) q += Number(it.qty);
+  for (const r of (S.data.returns || []).filter(x => x.invoice_id === inv.id && x.status !== 'void')) for (const it of (r.items || [])) if ((it.product_id == null ? null : Number(it.product_id)) === pid) q += Number(it.qty);
   return q;
 }
 function invoicedProductQty(inv, pid) {
@@ -1445,7 +1445,7 @@ const OPS = {
         const pid = k === 'null' ? null : Number(k);
         const lines = (o.items || []).filter(x => (x.product_id == null ? null : Number(x.product_id)) === pid);
         const sold = lines.reduce((s, x) => s + ctx.num(x.qty), 0);
-        const back = (S.data.returns || []).filter(r => r.order_id === o.id).reduce((s, r) => s + (r.items || []).filter(it => (it.product_id == null ? null : Number(it.product_id)) === pid).reduce((x, it) => x + ctx.num(it.qty), 0), 0);
+        const back = (S.data.returns || []).filter(r => r.order_id === o.id && r.status !== 'void').reduce((s, r) => s + (r.items || []).filter(it => (it.product_id == null ? null : Number(it.product_id)) === pid).reduce((x, it) => x + ctx.num(it.qty), 0), 0);
         need(asked[k] <= sold - back + 0.0005, `return qty exceeds sold quantity for product ${k}`);
         if (inv) need(asked[k] + (S.data.credit_notes || []).filter(c => c.invoice_id === inv.id && c.status !== 'void').reduce((s, c) => s + c.items.filter(it => (it.product_id == null ? null : Number(it.product_id)) === pid).reduce((x, it) => x + Number(it.qty), 0), 0) + back <= sold + 0.0005, 'this product has already been credited or returned (credit notes and sales-order returns together) up to the sold quantity');
         /* allocate over the order lines in order, skipping what was returned before */
@@ -1463,6 +1463,42 @@ const OPS = {
       if (split.toCash > 0.005) opts = confirmedRefund(ctx, p, split.toCash, user, 'customer');
       const row = ctx.applyReturnEffects(o, items, opts);
       return { return: row };
+    },
+  },
+
+  /* Void a sales-order return. Same rules as the credit-note void: admin only, reason required,
+     original kept (status void), journals reversed exactly, goods taken back out of stock only if
+     still on hand, rejected if any money was paid out to the customer. */
+  'return-void': {
+    view: 'orders',
+    run(ctx, p, user) {
+      need(user && user.role === 'admin', 'only an admin can void a return');
+      const S = ctx.store, r2 = v => Math.round(v * 100) / 100;
+      const rt = (S.data.returns || []).find(x => x.id === Number(p.id));
+      need(rt, 'return not found');
+      need(rt.status !== 'void', 'this return is already void');
+      need(String(p.reason || '').trim().length >= 5, 'a void reason of at least 5 characters is required');
+      const orig = S.data.journal.filter(j => j.ref_type === 'return' && j.ref_id === rt.id);
+      need(orig.length === 1, 'the original return posting was not found exactly once; review it manually');
+      const ar = S.data.accounts.find(a => a.code === '1100');
+      const paidOut = orig[0].lines.filter(l => !ar || l.account_id !== ar.id).reduce((s, l) => s + ctx.num(l.credit), 0);
+      need(paidOut < 0.005 && !rt.refund_confirmed_by, 'this return paid money back to the customer; voiding it would need that money recorded as returned, which is not supported yet');
+      const need2 = {};
+      for (const it of (rt.items || [])) if (it.product_id != null) need2[it.product_id] = (need2[it.product_id] || 0) + ctx.num(it.qty);
+      for (const [pid, q] of Object.entries(need2)) {
+        const pr = S.data.products.find(x => x.id === Number(pid));
+        need(pr && ctx.num(pr.stock) >= q, `cannot void: the ${q} unit(s) of ${pr ? pr.name : pid} put back in stock by this return are no longer on hand`);
+      }
+      const rev = (j, memo, rtype) => need(ctx.postJournal({ date: ctx.todayStr(), memo, ref_type: rtype, ref_id: rt.id,
+        lines: j.lines.map(l => ({ account_id: l.account_id, debit: l.credit, credit: l.debit })) }), 'reversal could not be posted');
+      rev(orig[0], `Void of return ${rt.number}: ${String(p.reason).trim()}`, 'return-void');
+      const cg = S.data.journal.filter(j => j.ref_type === 'return-cogs' && j.ref_id === rt.id);
+      if (cg.length === 1) rev(cg[0], `Void of COGS reversal for ${rt.number}`, 'return-cogs-void');
+      const st = (rt.items || []).filter(it => it.product_id != null).map(it => ({ product_id: it.product_id, qty: it.qty }));
+      if (st.length) ctx.applyStock(st, -1, { reason: 'return-void', ref_type: 'return', ref_id: rt.id });
+      Object.assign(rt, { status: 'void', void_reason: String(p.reason).trim(), voided_by: user.username, voided_at: new Date().toISOString() });
+      S.save();
+      return { return: rt };
     },
   },
 

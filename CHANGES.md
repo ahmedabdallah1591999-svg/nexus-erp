@@ -51,4 +51,4 @@ Not changed / still open: Windows scripts were reviewed but never run on Windows
 ## hotfix11 (local)
 - credit-note-void and purchase-return-void (admin only, reason >=5 chars). Original stays with status void/who/when/why; its journal is reversed line by line at original amounts; restocked goods are taken back only if still on hand; invoice credited_amount / PO returned_amount adjusted; double-void and concurrent voids guarded.
 - Not voidable: documents that included a confirmed refund (cash moved), since recording money coming back is unsupported.
-- Still open: sales-order return void, credit balances/store credit.
+- return-void for sales-order returns (same rules). Still open: credit balances/store credit.

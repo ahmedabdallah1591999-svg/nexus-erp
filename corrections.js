@@ -99,7 +99,7 @@ function renderCorrections(kind) {
     <td>${money(r.total)}</td>
     <td><div class="cell-sub">${t('Applied to balance')} ${money(isInv ? r.applied_to_receivable : r.applied_to_payable)}</div>${r.refunded > 0 ? `<div class="cell-sub">${t('Refunded')} ${money(r.refunded)} (${esc(r.refund_method)})</div>` : ''}</td>
     <td>${esc(r.reason)}</td>
-    <td>${r.status === 'void' ? `<span class="badge lost">${t('Voided')}</span><div class="cell-sub">${esc(r.void_reason || '')}</div>` : ((typeof Auth !== 'undefined' && Auth.current && Auth.current.role === 'admin' && inServerMode()) ? `<button class="ghost-btn" data-void="${r.id}">${t('Void')}</button>` : '')}</td></tr>`).join('');
+    <td>${r.status === 'void' ? `<span class="badge lost">${t('Voided')}</span><div class="cell-sub">${esc(r.void_reason || '')}</div>` : ((typeof Auth !== 'undefined' && Auth.current && Auth.current.role === 'admin' && inServerMode()) ? `<button class="mini-btn danger" data-void="${r.id}">${t('Void')}</button>` : '')}</td></tr>`).join('');
   const div = document.createElement('div');
   div.className = 'card';
   div.style.marginTop = '14px';
