@@ -83,10 +83,14 @@ ${sheets.map((sh, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.ope
     }).join('\n');
     const chartImages = (images || []).filter(im => im.sheet === i);
     const sheetCharts = (charts || []).filter(c => c.sheet === i);
+    /* column widths from the content (a sheet with no <cols> clips dates and Arabic labels) */
+    const widths = [];
+    (sh.rows || []).slice(0, 300).forEach(row => (row || []).forEach((cell, c) => { const n = String(cell == null ? '' : cell).length; widths[c] = Math.max(widths[c] || 0, n); }));
+    const colsXml = widths.length ? '<cols>' + widths.map((w, c) => `<col min="${c + 1}" max="${c + 1}" width="${Math.min(60, Math.max(10, Math.round(w * 1.25) + 2))}" customWidth="1"/>`).join('') + '</cols>\n' : '';
     const needsDrawing = chartImages.length || sheetCharts.length;
     zip.file(`xl/worksheets/sheet${i + 1}.xml`, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-<sheetData>
+${colsXml}<sheetData>
 ${rowsXml}
 </sheetData>
 ${needsDrawing ? '<drawing r:id="rId1"/>' : ''}

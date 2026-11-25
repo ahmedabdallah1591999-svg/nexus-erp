@@ -63,3 +63,6 @@ hotfix16: supplier credit balances (account 1150, supplier-credit-apply, void ru
 
 ## hotfix16c
 - Simple ledger: credit-settled invoice part and supplier-credit returns no longer counted as income. Cash report: approved expenses now land in Expenses paid. cash-test: real expense approve, real reclass, real Excel check.
+
+## hotfix16d
+- Purchase returns shown as purchase cost adjustments (not revenue). Legacy POS refund method inference and reclass fallback. Excel column widths.

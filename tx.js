@@ -1022,7 +1022,7 @@ const OPS = {
       const refunded = new Set((S.data.payments || []).filter(o => o.direction === 'out').map(o => o.ref_type + ':' + o.ref_id));
       const rows = (S.data.payments || []).filter(pay =>
         pay.direction === 'in' && !pay.reclassed && !refunded.has(pay.ref_type + ':' + pay.ref_id) &&
-        ['bank', 'transfer', 'card'].includes(pay.method) && pay.journal_id &&
+        ['bank', 'transfer', 'card'].includes(pay.method || ((S.data.invoices || []).find(i => i.id === Number(pay.ref_id)) || {}).pos_method) && pay.journal_id &&
         (((S.data.journal || []).find(j => j.id === pay.journal_id) || {}).lines || [])
           .some(l => ctx.num(l.debit) > 0 && l.account_id === cash.id));
       let targets;
@@ -1391,7 +1391,8 @@ const OPS = {
         lines: orig[0].lines.map(l => ({ account_id: l.account_id, debit: l.credit, credit: l.debit })) }), 'reversal could not be posted');
       const stockItems = (pr.items || []).filter(it => it.product_id != null).map(it => ({ product_id: it.product_id, qty: it.qty }));
       if (stockItems.length) ctx.applyStock(stockItems, +1, { reason: 'purchase-return-void', ref_type: 'purchase_return', ref_id: pr.id });
-      if (r2(ctx.num(pr.total) - ctx.num(pr.store_credit)) > 0.005) S.add('ledger', { date: ctx.todayStr(), type: 'expense', category: 'Purchase return void', amount: r2(ctx.num(pr.total) - ctx.num(pr.store_credit)), ref_type: 'purchase_return', ref_id: pr.id, memo: `${pr.number} voided` });
+      const postedInc = r2(S.data.ledger.filter(l => l.ref_type === 'purchase_return' && l.ref_id === pr.id && l.type === 'income').reduce((s, l) => s + ctx.num(l.amount), 0));
+      if (postedInc > 0.005) S.add('ledger', { date: ctx.todayStr(), type: 'expense', category: 'Purchase return void', amount: postedInc, ref_type: 'purchase_return', ref_id: pr.id, memo: `${pr.number} voided` });
       po.returned_amount = Math.max(0, r2(ctx.num(po.returned_amount) - ctx.num(pr.total)));
       if (sc) Object.assign(sc, { status: 'void', remaining: 0 });
       Object.assign(pr, { status: 'void', void_reason: String(p.reason).trim(), voided_by: user.username, voided_at: new Date().toISOString() });
@@ -2263,7 +2264,11 @@ const OPS = {
       need(inv.pos_ref, 'not a POS sale');
       need(inv.status === 'paid', 'only a paid POS sale can be refunded');
       need(ctx.invoiceCreditedTotal(inv) < 0.005, 'this sale already has a credit note or return; a full refund would credit it twice');
-      const method = ['cash', 'bank', 'transfer', 'card'].includes(p.method) ? p.method : (inv.pos_method || 'cash');
+      /* legacy sales can miss pos_method / payment method: fall back to where the original settlement was actually booked */
+      const origPay0 = (S.data.payments || []).find(pay => pay.ref_type === 'invoice' && Number(pay.ref_id) === inv.id && pay.direction === 'in' && pay.journal_id);
+      const origJ0 = origPay0 && (S.data.journal || []).find(j => j.id === origPay0.journal_id);
+      const bookedBank = origJ0 && (origJ0.lines || []).some(l => ctx.num(l.debit) > 0 && l.account_id === ctx.accountByCode('1010').id);
+      const method = ['cash', 'bank', 'transfer', 'card'].includes(p.method) ? p.method : (inv.pos_method || (origPay0 && origPay0.method) || (bookedBank ? 'bank' : 'cash'));
       const today = ctx.todayStr();
       const total = Math.round(ctx.invoiceTotal(inv) * 100) / 100;
       const sub = Math.round((inv.items || []).reduce((t2, it) => t2 + ctx.num(it.qty) * ctx.num(it.price), 0) * 100) / 100;

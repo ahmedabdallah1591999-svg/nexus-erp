@@ -75,11 +75,20 @@ function deleteExpense(id) {
   store.remove('expenses', id); toast(t('Expense deleted'));
 }
 
+/* Purchase-side adjustments (a purchase return, or a voided receipt/return) reduce what a purchase cost. They are not
+   revenue and not cash received: they are netted against Expenses and listed separately, so Income stays real income. */
+function isPurchaseAdj(l) {
+  return l.ref_type === 'purchase_return' || ['Purchase return', 'Purchase return void', 'Purchase receipt void'].includes(l.category);
+}
+
 function monthTotals(month) {
   const rows = store.data.ledger.filter(l => (l.date || '').startsWith(month));
-  const income = rows.filter(l => l.type === 'income').reduce((s, l) => s + num(l.amount), 0);
-  const expense = rows.filter(l => l.type === 'expense').reduce((s, l) => s + num(l.amount), 0);
-  return { income, expense, net: income - expense };
+  const sum = f => rows.filter(f).reduce((s, l) => s + num(l.amount), 0);
+  const income = sum(l => l.type === 'income' && !isPurchaseAdj(l));
+  const adj = sum(l => l.type === 'income' && isPurchaseAdj(l)) - sum(l => l.type === 'expense' && isPurchaseAdj(l));
+  const expense = sum(l => l.type === 'expense' && !isPurchaseAdj(l)) - adj;
+  const r = v => Math.round(v * 100) / 100;
+  return { income: r(income), expense: r(expense), net: r(income - expense), purchase_adjustment: r(adj) };
 }
 
 function renderFinance() {
@@ -89,9 +98,9 @@ function renderFinance() {
   const body = rows.map(l => `
     <tr>
       <td>${esc(l.date || '—')}</td>
-      <td><span class="badge ${l.type === 'income' ? 'won' : 'lost'}">${t(l.type)}</span></td>
+      <td>${isPurchaseAdj(l) ? `<span class="badge">${t('purchase cost adjustment (not revenue)')}</span>` : `<span class="badge ${l.type === 'income' ? 'won' : 'lost'}">${t(l.type)}</span>`}</td>
       <td>${t(l.category || 'Other')}</td>
-      <td class="${l.type === 'income' ? '' : 'overdue-text'}">${l.type === 'income' ? '+' : '−'}${money(l.amount)}</td>
+      <td class="${l.type === 'income' || isPurchaseAdj(l) ? '' : 'overdue-text'}">${l.type === 'income' ? '+' : '−'}${money(l.amount)}</td>
       <td>${esc(l.memo || '')}</td>
       <td class="row-actions">
         ${l.ref_type ? `<span class="cell-sub" title="${t('Posted automatically')}">${t('auto')}</span>` : `<button class="danger-btn" data-act="del" data-id="${l.id}" title="${t('Delete')}">🗑</button>`}
