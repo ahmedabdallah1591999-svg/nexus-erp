@@ -25,7 +25,6 @@ function editQC(row) {
     { key: 'notes', label: t('Notes'), value: row?.notes || '', full: true },
   ], out => {
     out.product_id = out.product_id ? Number(out.product_id) : null;
-    out.qty_inspected = Number(out.qty_inspected);
     txCall('qc-save', { id: row && row.id, out }, t('Inspection saved'));
   });
 }
@@ -52,6 +51,9 @@ function editDoc(row) {
   ], out => txCall('doc-save', { id: row && row.id, out }, t('Document saved')));
 }
 
+function myUsername() { return (typeof Auth !== 'undefined' && Auth.current && Auth.current.username) || ''; }
+function isAdminUser() { return typeof Auth !== 'undefined' && Auth.current && Auth.current.role === 'admin'; }
+
 function renderQuality() {
   const el = $('#view-quality');
   if (!inServerMode()) {
@@ -63,7 +65,7 @@ function renderQuality() {
   const docs = (store.data.documents || []).slice().sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
   const prod = id => { const p = store.data.products.find(x => x.id === id); return p ? p.name : '—'; };
   const badge = (txt, cls) => `<span class="badge ${cls}">${esc(t(txt))}</span>`;
-  const resBadge = q => q.result === 'pass' ? badge('pass', 'won') : q.result === 'fail' ? badge(q.status === 'open' ? 'nonconforming' : 'closed', 'lost') : badge('pending', 'lead');
+  const resBadge = q => q.voided ? badge('voided', 'inactive') : q.result === 'pass' ? badge('pass', 'won') : q.result === 'fail' ? badge(q.status === 'open' ? 'nonconforming' : 'closed', 'lost') : badge('pending', 'lead');
   const docBadge = s => badge(s, s === 'approved' ? 'won' : s === 'review' ? 'lead' : s === 'obsolete' ? 'lost' : 'inactive');
 
   const open = checks.filter(q => q.status === 'open').length;
@@ -81,7 +83,8 @@ function renderQuality() {
       <td class="row-actions">
         ${q.status === 'open' && q.result === 'pending' ? `<button class="secondary-btn" data-qa="pass" data-id="${q.id}">${t('Pass')}</button> <button class="secondary-btn" data-qa="fail" data-id="${q.id}">${t('Fail')}</button> <button class="icon-btn" data-qa="edit" data-id="${q.id}">✏️</button>` : ''}
         ${q.status === 'open' && q.result === 'fail' ? `<button class="secondary-btn" data-qa="close" data-id="${q.id}">${t('Close with corrective action')}</button>` : ''}
-        <button class="danger-btn" data-qa="del" data-id="${q.id}" title="${t('Delete')}">🗑</button></td></tr>`).join('');
+        ${q.result === 'pending' && !q.voided ? `<button class="danger-btn" data-qa="del" data-id="${q.id}" title="${t('Delete')}">🗑</button>` : ''}
+        ${q.result !== 'pending' && !q.voided && isAdminUser() ? `<button class="secondary-btn" data-qa="void" data-id="${q.id}">${t('Void')}</button>` : ''}</td></tr>`).join('');
     body = `<div class="sub" style="margin-bottom:6px">${open} ${t('open')} · ${ncr} ${t('open nonconformances')}</div>
       <div class="table-wrap"><table class="data"><thead><tr><th>#</th><th>${t('Title')}</th><th>${t('Type')}</th><th>${t('Product')}</th><th>${t('Inspected / failed')}</th><th>${t('Result')}</th><th>${t('Inspector')}</th><th></th></tr></thead>
       <tbody id="qBody">${rows || `<tr><td colspan="8" class="empty-state">${t('No inspections yet.')}</td></tr>`}</tbody></table></div>`;
@@ -91,10 +94,10 @@ function renderQuality() {
       <td>${esc(t(d.doc_type))}</td><td>v${d.version}</td><td>${docBadge(d.status)}</td><td>${esc(d.owner)}</td>
       <td class="row-actions">
         ${d.status === 'draft' ? `<button class="secondary-btn" data-da="review" data-id="${d.id}">${t('Send for review')}</button> <button class="icon-btn" data-da="edit" data-id="${d.id}">✏️</button>` : ''}
-        ${d.status === 'review' ? `<button class="secondary-btn" data-da="approved" data-id="${d.id}">${t('Approve')}</button> <button class="secondary-btn" data-da="draft" data-id="${d.id}">${t('Return to draft')}</button>` : ''}
+        ${d.status === 'review' ? `${d.owner !== myUsername() ? `<button class="secondary-btn" data-da="approved" data-id="${d.id}">${t('Approve')}</button> ` : `<span class="cell-sub">${t('Needs a different approver')}</span> `}<button class="secondary-btn" data-da="draft" data-id="${d.id}">${t('Return to draft')}</button>` : ''}
         ${d.status === 'approved' ? `<button class="secondary-btn" data-da="revise" data-id="${d.id}">${t('Revise')}</button> <button class="secondary-btn" data-da="obsolete" data-id="${d.id}">${t('Mark obsolete')}</button>` : ''}
         <button class="icon-btn" data-da="history" data-id="${d.id}" title="${t('History')}">🕘</button>
-        <button class="danger-btn" data-da="del" data-id="${d.id}" title="${t('Delete')}">🗑</button></td></tr>`).join('');
+        ${d.status === 'draft' && d.version === 1 && d.history.length === 1 ? `<button class="danger-btn" data-da="del" data-id="${d.id}" title="${t('Delete')}">🗑</button>` : ''}</td></tr>`).join('');
     const sel = docs.find(d => d.id === selectedDocId);
     const hist = sel ? `<h3 style="margin:14px 0 6px">${esc(sel.number)} — ${t('History')}</h3>` + sel.history.slice().reverse().map(h =>
       `<div class="note-item"><div class="note-head"><strong>${esc(h.by)}</strong> · v${h.version} · ${esc(h.at.replace('T', ' ').slice(0, 16))}</div><div>${esc(h.note)}</div></div>`).join('')
@@ -118,6 +121,8 @@ function renderQuality() {
     if (a === 'edit') editQC(q);
     else if (a === 'pass' || a === 'fail') recordQCResult(q, a);
     else if (a === 'close') closeQC(q);
+    else if (a === 'void') openModal(t('Void inspection'), [{ key: 'reason', label: t('Reason (kept in the record)'), required: true, value: '', full: true }],
+      out => txCall('qc-void', { id: q.id, reason: out.reason }, t('Inspection voided')));
     else confirmDelete(q.number, () => txCall('qc-delete', { id: q.id }, t('Inspection deleted')));
   });
   const db = $('#dBody');

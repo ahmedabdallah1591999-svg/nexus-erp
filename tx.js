@@ -115,6 +115,15 @@ function validItems(items, S) {
   }
 }
 
+/* strict quantity: a finite number or numeric string in (0, 1e9]; rejects
+   booleans, arrays, null, '', NaN, Infinity */
+function qcQty(v, label) {
+  const ok = (typeof v === 'number') || (typeof v === 'string' && /^\s*\d+(\.\d+)?\s*$/.test(v));
+  const n = ok ? Number(v) : NaN;
+  need(Number.isFinite(n) && n > 0 && n <= 1e9, `${label} must be a number above 0 and at most 1,000,000,000`);
+  return Math.round(n * 1000) / 1000;
+}
+
 const OPS = {
   'invoice-save': {
     view: 'invoices',
@@ -1095,6 +1104,7 @@ const OPS = {
   },
 
   /* ---------------- quality + document control ---------------- */
+
   'qc-save': {
     view: 'quality', nonFinancial: true,
     run(ctx, p, user) {
@@ -1104,8 +1114,7 @@ const OPS = {
       const TYPES = ['incoming', 'in-process', 'final'];
       need(String(out.title || '').trim(), 'title required');
       need(!out.product_id || S.data.products.some(x => x.id === Number(out.product_id)), 'product not found');
-      const inspected = Number(out.qty_inspected);
-      need(Number.isFinite(inspected) && inspected > 0, 'inspected quantity must be positive');
+      const inspected = qcQty(out.qty_inspected, 'inspected quantity');
       if (p.id) {
         const q = (S.data.quality_checks || []).find(x => x.id === Number(p.id));
         need(q, 'inspection not found');
@@ -1141,8 +1150,8 @@ const OPS = {
       need(q, 'inspection not found');
       need(q.status === 'open', 'a closed inspection cannot be changed');
       need(['pass', 'fail'].includes(p.result), 'result must be pass or fail');
-      const failed = p.result === 'fail' ? Number(p.qty_failed) : 0;
-      if (p.result === 'fail') need(Number.isFinite(failed) && failed > 0 && failed <= q.qty_inspected, 'failed quantity must be between 1 and the inspected quantity');
+      const failed = p.result === 'fail' ? qcQty(p.qty_failed, 'failed quantity') : 0;
+      if (p.result === 'fail') need(failed <= q.qty_inspected, 'failed quantity cannot exceed the inspected quantity');
       q.result = p.result; q.qty_failed = failed;
       q.inspected_by = user.username; q.inspected_at = new Date().toISOString(); q.updated_at = q.inspected_at;
       if (p.result === 'pass') { q.status = 'closed'; q.closed_at = q.inspected_at; }
@@ -1171,10 +1180,29 @@ const OPS = {
       const S = ctx.store;
       const q = (S.data.quality_checks || []).find(x => x.id === Number(p.id));
       need(q, 'inspection not found');
-      need(user.role === 'admin' || (q.created_by === user.username && q.result === 'pending'), 'only admin can delete an inspected record');
+      /* only a never-inspected record may be removed; anything with a result
+         is history and can only be voided (kept, flagged, attributed) */
+      need(q.result === 'pending' && !q.voided, 'an inspected record cannot be deleted: void it with a reason');
+      need(user.role === 'admin' || q.created_by === user.username, 'only the creator or admin can delete');
       S.data.quality_checks = S.data.quality_checks.filter(x => x.id !== q.id);
       S.save();
       return { deleted: q.id };
+    },
+  },
+  'qc-void': {
+    view: 'quality', nonFinancial: true,
+    run(ctx, p, user) {
+      const S = ctx.store;
+      const q = (S.data.quality_checks || []).find(x => x.id === Number(p.id));
+      need(q, 'inspection not found');
+      need(user.role === 'admin', 'only admin can void an inspection record');
+      need(q.result !== 'pending', 'a never-inspected record is deleted, not voided');
+      need(!q.voided, 'already voided');
+      need(String(p.reason || '').trim().length >= 5, 'a void reason is required');
+      q.voided = true; q.void_reason = String(p.reason).trim(); q.voided_by = user.username; q.voided_at = new Date().toISOString();
+      q.status = 'voided'; q.updated_at = q.voided_at;
+      S.save();
+      return { check: q };
     },
   },
   'doc-save': {
@@ -1249,7 +1277,10 @@ const OPS = {
       const S = ctx.store;
       const d = (S.data.documents || []).find(x => x.id === Number(p.id));
       need(d, 'document not found');
-      need(user.role === 'admin' || (d.owner === user.username && d.status === 'draft'), 'only admin can delete a document beyond draft');
+      /* only a draft that was never reviewed, approved or revised may go;
+         everything else keeps its history (mark it obsolete instead) */
+      need(d.status === 'draft' && d.version === 1 && d.history.length === 1, 'a document with history cannot be deleted: mark it obsolete');
+      need(user.role === 'admin' || d.owner === user.username, 'only the owner or admin can delete');
       S.data.documents = S.data.documents.filter(x => x.id !== d.id);
       S.save();
       return { deleted: d.id };
@@ -1749,10 +1780,23 @@ function runTx(db, user, op, payload, canView) {
     ctx.dbUsers = db.users || [];
     ctx.ensureCOA();
     ctx.ensureStockBaseline();
-    const BOOK_KEYS = ['journal', 'ledger', 'stock_moves', 'products', 'accounts', 'invoices', 'purchases', 'payments', 'warehouses', 'expenses', 'assets', 'recurring', 'sales_orders', 'returns', 'production', 'pos_shifts'];
-    const snap = () => JSON.stringify(BOOK_KEYS.map(k => ctx.store.data[k]));
+    /* A nonFinancial op may change ONLY its allowlisted collections and
+       meta counters. Everything else (money, stock, books, every other
+       module, users' settings) must be byte-identical afterwards or the op
+       is rejected and nothing is committed (ctx works on a deep copy). */
+    const NF_COLL = ['quality_checks', 'documents'];
+    const NF_META = ['qcSeq', 'docSeq', 'nextId']; // nextId: row-id counter used by store.add
+    const snap = () => {
+      const d = ctx.store.data;
+      const rest = {};
+      for (const k of Object.keys(d)) if (k !== 'meta' && !NF_COLL.includes(k)) rest[k] = d[k];
+      const meta = {};
+      for (const k of Object.keys(d.meta || {})) if (!NF_META.includes(k)) meta[k] = d.meta[k];
+      return JSON.stringify([rest, meta]);
+    };
     const before = spec.nonFinancial ? snap() : null;
     const result = spec.run(ctx, payload || {}, user);
+    if (before !== null && snap() !== before) return { ok: false, error: 'operation changed data outside its allowed collections' };
     /* independent integrity gate on the resulting books. A nonFinancial op
        (quality, document register) is exempt ONLY when it left every
        books/stock collection byte-identical, so a pre-existing
