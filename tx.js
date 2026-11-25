@@ -104,6 +104,8 @@ function need(cond, msg) { if (!cond) throw new TxError(msg); }
 /* remove fields a client may never set on a record (identity, numbering,
    links and flags that only other transactions write) */
 function stripServerFields(out, keys) { for (const k of keys) delete out[k]; return out; }
+/* keep only the named fields of a client payload (allowlist) */
+function pick(obj, keys) { const r = {}; for (const k of keys) if (obj && obj[k] !== undefined) r[k] = obj[k]; return r; }
 
 function validItems(items, S) {
   need(Array.isArray(items) && items.length > 0, 'items required');
@@ -132,15 +134,37 @@ const OPS = {
   'invoice-save': {
     view: 'invoices',
     run(ctx, p) {
-      const out = p.out || {};
-      need(['draft', 'sent', 'paid'].includes(out.status), 'bad status');
+      const raw = p.out || {};
+      need(['draft', 'sent', 'paid'].includes(raw.status), 'bad status');
       const S = ctx.store;
-      validItems(out.items, S);
-      need(ctx.num(out.tax_rate) >= 0 && ctx.num(out.tax_rate) <= 100, 'bad tax rate');
+      validItems(raw.items, S);
+      need(ctx.num(raw.tax_rate) >= 0 && ctx.num(raw.tax_rate) <= 100, 'bad tax rate');
+      need(raw.contact_id == null || raw.contact_id === '' || S.data.contacts.some(c => c.id === Number(raw.contact_id)), 'customer not found');
+      /* only these client fields are read; number and every posting flag
+         (stock_applied, journal_*, ledger_posted) are server-owned */
+      const out = {
+        status: raw.status, contact_id: raw.contact_id ? Number(raw.contact_id) : null,
+        deal_id: raw.deal_id ? Number(raw.deal_id) : null,
+        issue_date: raw.issue_date, due_date: raw.due_date, tax_rate: ctx.num(raw.tax_rate),
+        notes: String(raw.notes || ''), items: raw.items,
+      };
       let existing = null;
       if (p.id != null) {
         existing = S.data.invoices.find(i => i.id === Number(p.id));
         need(existing, 'invoice not found');
+        const posted = existing.status !== 'draft' || existing.stock_applied || existing.journal_sent;
+        if (posted) {
+          /* a posted invoice is accounting history: lines, customer, tax and
+             issue date are locked, and it cannot go back to draft or from
+             paid to sent. Allowed: notes, due date, deal link, sent -> paid. */
+          const eq = (x, y) => Math.abs(Number(x) - Number(y)) < 1e-9;
+          const same = (out.contact_id || null) === (existing.contact_id || null) && eq(out.tax_rate, existing.tax_rate || 0)
+            && out.issue_date === existing.issue_date && out.items.length === existing.items.length
+            && out.items.every((it, i) => (it.product_id == null ? null : Number(it.product_id)) === (existing.items[i].product_id == null ? null : Number(existing.items[i].product_id))
+              && eq(it.qty, existing.items[i].qty) && eq(it.price, existing.items[i].price));
+          need(same, 'a posted invoice cannot be changed: its lines, customer, tax and date are locked');
+          need(out.status === existing.status || (existing.status === 'sent' && out.status === 'paid'), 'a posted invoice cannot go back to an earlier status');
+        }
       }
       /* stock availability when the invoice would leave draft */
       const willApply = out.status !== 'draft' && !(existing && existing.stock_applied);
@@ -174,7 +198,7 @@ const OPS = {
   'quote-save': {
     view: 'quotes',
     run(ctx, p) {
-      const out = stripServerFields(p.out || {}, ['id', 'number', 'invoiced_invoice_id', 'order_id', 'created_at']);
+      const out = pick(p.out, ['status', 'contact_id', 'deal_id', 'issue_date', 'valid_until', 'tax_rate', 'notes', 'items']);
       need(['draft', 'sent', 'accepted', 'rejected'].includes(out.status), 'bad status');
       const S = ctx.store;
       validItems(out.items, S);
@@ -594,7 +618,7 @@ const OPS = {
     view: 'products',
     run(ctx, p) {
       /* bom is written only by bom-save (validated, single-level) */
-      const out = stripServerFields(p.out || {}, ['id', 'bom', 'created_at']);
+      const out = pick(p.out, ['name', 'sku', 'category', 'reorder_level', 'price', 'cost', 'stock']);
       need(String(out.name || '').trim(), 'name required');
       need(ctx.num(out.price) >= 0 && ctx.num(out.cost) >= 0, 'prices must not be negative');
       const S = ctx.store;
@@ -636,7 +660,7 @@ const OPS = {
   'order-save': {
     view: 'orders',
     run(ctx, p) {
-      const out = stripServerFields(p.out || {}, ['id', 'number', 'invoice_id', 'quote_id', 'fulfilled_date', 'created_at']);
+      const out = pick(p.out, ['status', 'contact_id', 'order_date', 'tax_rate', 'notes', 'items']);
       need(['draft', 'confirmed'].includes(out.status), 'bad status');
       const S = ctx.store;
       validItems(out.items, S);
@@ -920,7 +944,7 @@ const OPS = {
   'recurring-save': {
     view: 'invoices',
     run(ctx, p) {
-      const out = stripServerFields(p.out || {}, ['id', 'last_invoice_id', 'created_at']);
+      const out = pick(p.out, ['status', 'contact_id', 'interval', 'next_date', 'end_date', 'tax_rate', 'notes', 'items', 'auto_post', 'anchor_day']);
       const S = ctx.store;
       need(['weekly', 'monthly', 'quarterly', 'yearly'].includes(out.interval), 'bad interval');
       need(out.contact_id && S.data.contacts.some(c => c.id === Number(out.contact_id)), 'customer required');

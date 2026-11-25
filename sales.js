@@ -308,6 +308,12 @@ function saveInvoice(existing, out) {
   /* Server mode: the server computes and commits the whole transaction
      (stock, journals, ledger, number) authoritatively. */
   if (inServerMode()) {
+    /* a status-only change (Mark paid) still sends the full record: the
+       server validates the whole invoice and locks posted lines */
+    if (existing && !out.items) {
+      out = { contact_id: existing.contact_id, deal_id: existing.deal_id, issue_date: existing.issue_date, due_date: existing.due_date,
+        tax_rate: existing.tax_rate, notes: existing.notes || '', items: existing.items, ...out };
+    }
     txCall('invoice-save', { id: existing && existing.id, out },
       existing ? `${t('Invoice')} ${existing.number} ${t('updated')}` : `${t('Invoice')} ${t('created')}`);
     return;
