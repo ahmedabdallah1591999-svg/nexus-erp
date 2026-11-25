@@ -135,23 +135,23 @@ ok('C9 forged return price ignored (priced 30)',all(it['price']==30 for r in row
 # credit notes can't hit a refunded POS sale
 s,j=tx({'op':'credit-note-create','invoice_id':sale,'reason':'abc','items':[{'line':0,'qty':1}]}); ok('C10 credit note on refunded POS sale blocked',s==400,j)
 
-# revalue / cost change
+# revalue / write-down: blocked until a valuation-allowance model exists
 rp=tx({'op':'product-save','out':{'name':'RV','price':30,'cost':10,'stock':0}})[1]['product']['id']
 tx({'op':'stock-adjust','product_id':rp,'qty':4,'memo':'open'})
-st,jj=tx({'op':'product-save','id':rp,'out':{'name':'RV','price':30,'cost':12}}); ok('R1 cost change with stock rejected, points to revalue',st==400 and 'evalue' in json.dumps(jj),jj)
 jb=len(call('GET','/api/data',tok=tok)[1]['data']['journal'])
-ok('R2b cost increase on stock refused (no upward revaluation)',tx({'op':'product-revalue','id':rp,'new_cost':12,'reason':'abc','expected_value':8})[0]==400)
-ok('R2 non-admin revalue refused',tx({'op':'product-revalue','id':rp,'new_cost':8,'reason':'abc','expected_value':-8},itok)[0]==403)
-ok('R3 no reason refused',tx({'op':'product-revalue','id':rp,'new_cost':8,'reason':'','expected_value':-8})[0]==400)
-ok('R4 wrong expected value refused',tx({'op':'product-revalue','id':rp,'new_cost':8,'reason':'abc','expected_value':-9})[0]==400)
-ok('R5 negative cost refused',tx({'op':'product-revalue','id':rp,'new_cost':-1,'reason':'abc','expected_value':-44})[0]==400)
-d=call('GET','/api/data',tok=tok)[1]['data']; ok('R6 refusals changed nothing',len(d['journal'])==jb and [p for p in d['products'] if p['id']==rp][0]['cost']==10)
-res=par(6,lambda i:tx({'op':'product-revalue','id':rp,'new_cost':8,'reason':'supplier repricing','expected_value':-8})[0]); ok('R7 concurrent revalue: exactly one applies',res.count(200)==1,res)
-d=call('GET','/api/data',tok=tok)[1]['data']; pr=[p for p in d['products'] if p['id']==rp][0]
-ok('R8 cost 12, history kept, one journal',pr['cost']==8 and len(pr.get('cost_history',[]))==1 and len(d['journal'])==jb+1,pr)
-ok('R9 invariants after revalue',not invariants(d),invariants(d))
-je=d['journal'][-1]; ok('R10 journal Dr1200 8',sorted((l['debit'],l['credit']) for l in je['lines'])==[(0,8),(8,0)],je)
-
+st,jj=tx({'op':'product-save','id':rp,'out':{'name':'RV','price':30,'cost':12}}); ok('R1 cost change with stock rejected with clear wording',st==400 and 'not supported' in json.dumps(jj),jj)
+for nc,ev in ((8,-8),(12,8)):
+    s_,j_=tx({'op':'product-revalue','id':rp,'new_cost':nc,'reason':'abc','expected_value':ev}); ok('R2 revalue/write-down blocked (cost %s)'%nc,s_==400 and 'not supported' in json.dumps(j_),j_)
+d=call('GET','/api/data',tok=tok)[1]['data']; ok('R3 nothing changed: cost still 10, no journal',len(d['journal'])==jb and [p for p in d['products'] if p['id']==rp][0]['cost']==10)
+ok('R4 cost change at zero stock still allowed',tx({'op':'product-save','id':[p for p in d['products'] if p['name']=='W'][0]['id'],'out':{'name':'W','price':30,'cost':10}})[0]==200)
+zp=tx({'op':'product-save','out':{'name':'ZS','price':3,'cost':1,'stock':0}})[1]['product']['id']
+ok('R5 cost change when stock is 0 allowed',tx({'op':'product-save','id':zp,'out':{'name':'ZS','price':3,'cost':2}})[0]==200)
+# test seam cannot be enabled by shipped files
+import glob
+shipped=[f for f in glob.glob('/tmp/nexus-erp/*')+glob.glob('/tmp/nexus-erp/**/*',recursive=True) if os.path.isfile(f) and not f.endswith(('matrix-test.py','CHANGES.md','COVERAGE.md')) and '.git/' not in f and 'node_modules' not in f]
+hits=[f for f in shipped if 'NEXUS_TEST' in open(f,errors='ignore').read() and not f.endswith('tx.js')]
+ok('R6 no shipped script/start file mentions the test seam',not hits,hits)
+ok('R7 forged future payroll month refused with seam off (production default)',tx({'op':'payroll','month':'2031-01'})[0]==400)
 # ---- business-logic / authority checks (valid-but-malicious values) ----
 call('POST','/api/users',{'username':'fin','password':'fin-pass-1','role':'employee','modules':['finance','accounting','assets','projects','invoices']},tok=tok)
 call('POST','/api/users',{'username':'exp','password':'exp-pass-1','role':'employee','modules':['expenses']},tok=tok)
@@ -207,5 +207,27 @@ ok('B27 finance user approves once',tx({'op':'expense-approve','id':xe[1].get('e
 ok('B28 second approval refused',tx({'op':'expense-approve','id':xe[1].get('expense',{}).get('id')},ftok)[0]==400)
 ok('B29 bad expense date refused',tx({'op':'expense-save','out':{'date':'bad','category':'x','amount':5}},xtok)[0]==400)
 d=call('GET','/api/data',tok=tok)[1]['data']; ok('B30 invariants at end',not invariants(d),invariants(d))
+
+# ---- stock + manufacturing ----
+sp=tx({'op':'product-save','out':{'name':'SA','price':5,'cost':2,'stock':0}})[1]['product']['id']
+tx({'op':'stock-adjust','product_id':sp,'qty':10,'memo':'open'})
+ok('S1 write-off below zero refused',tx({'op':'stock-adjust','product_id':sp,'qty':-11,'memo':'lost'})[0]==400)
+ok('S2 write-off without reason refused',tx({'op':'stock-adjust','product_id':sp,'qty':-1})[0]==400)
+ok('S3 valid write-off posts',tx({'op':'stock-adjust','product_id':sp,'qty':-1,'memo':'damaged'})[0]==200)
+ok('S4 transfer more than on hand refused',tx({'op':'stock-transfer','product_id':sp,'from':1,'to':2,'qty':50})[0]==400)
+d=call('GET','/api/data',tok=tok)[1]['data']; ok('S5 invariants after stock ops',not invariants(d),invariants(d))
+fp=tx({'op':'product-save','out':{'name':'FG','price':50,'cost':5,'stock':0}})[1]['product']['id']
+cp=tx({'op':'product-save','out':{'name':'CP','price':5,'cost':1,'stock':0}})[1]['product']['id']
+tx({'op':'stock-adjust','product_id':cp,'qty':20,'memo':'open'})
+ok('M1 bom saved',tx({'op':'bom-save','product_id':fp,'lines':[{'product_id':cp,'qty':2}]})[0]==200)
+ok('M2 component becoming a parent (multi-level) refused',tx({'op':'bom-save','product_id':cp,'lines':[{'product_id':sp,'qty':1}]})[0]==400)
+ok('M3 produce 20 with only 20 components refused',tx({'op':'produce','product_id':fp,'qty':20})[0]==400)
+ok('M4 produce 5 posts',tx({'op':'produce','product_id':fp,'qty':5,'client_ref':'pr1'})[0]==200)
+ok('M5 same client_ref returns original',tx({'op':'produce','product_id':fp,'qty':5,'client_ref':'pr1'})[1].get('deduped')==True)
+res=par(8,lambda i:tx({'op':'produce','product_id':fp,'qty':3,'client_ref':'pr2'})[1].get('deduped'))
+ok('M6 concurrent same ref: exactly one real run',res.count(None)+res.count(False)==1,res)
+d=call('GET','/api/data',tok=tok)[1]['data']; fgs=[p for p in d['products'] if p['id']==fp][0]['stock']
+ok('M7 finished stock 8 (5+3), components 20-16=4',fgs==8 and [p for p in d['products'] if p['id']==cp][0]['stock']==4,fgs)
+ok('M8 invariants after production',not invariants(d),invariants(d))
 print('matrix-test: PASS=%d FAIL=%d'%(PASS,FAIL))
 srv.terminate()

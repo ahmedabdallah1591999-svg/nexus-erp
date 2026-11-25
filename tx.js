@@ -35,7 +35,7 @@ function validDate(v) {
 }
 const MAXAMT = 1e12;
 /* test seam only: lets the automated suites simulate future periods. Never set in normal use. */
-const FUTURE_OK = process.env.NEXUS_TEST_ALLOW_FUTURE === '1';
+const FUTURE_OK = process.env.NEXUS_TEST_ALLOW_FUTURE === '1' && process.env.NEXUS_TEST_HARNESS === 'nexus-automated-suite';
 
 const SERVER_OWNED = new Set(['accounts', 'journal', 'payments', 'warehouses', 'stock_moves',
   'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring', 'expenses', 'projects', 'timesheets',
@@ -335,7 +335,16 @@ const OPS = {
   'stock-adjust': {
     view: 'stock',
     run(ctx, p) {
-      need(Number(p.qty) !== 0, 'qty must not be zero');
+      need(Number(p.qty) !== 0 && Math.abs(Number(p.qty)) <= 1e9, 'qty must be a non-zero number');
+      if (Number(p.qty) < 0) {
+        /* a write-off posts to the books: it needs a stated reason and cannot take stock below zero */
+        need(String(p.memo || '').trim().length >= 3, 'a reason is required to reduce stock');
+        const pr = ctx.store.data.products.find(x => x.id === Number(p.product_id));
+        need(pr && ctx.num(pr.stock) + Number(p.qty) >= -1e-9, 'cannot reduce stock below zero');
+        const wh = Number(p.warehouse_id) || (ctx.store.data.warehouses[0] || {}).id;
+        const have = ctx.store.data.stock_moves.filter(m => m.product_id === pr.id && m.warehouse_id === wh).reduce((a, m) => a + ctx.num(m.qty), 0);
+        need(have + Number(p.qty) >= -1e-9, 'cannot reduce this warehouse below zero');
+      }
       const row = ctx.adjustStock(Number(p.product_id), Number(p.warehouse_id) || null, ctx.num(p.qty), p.memo || '');
       need(row, 'adjustment rejected');
       return { move: row };
@@ -345,7 +354,7 @@ const OPS = {
   'stock-transfer': {
     view: 'stock',
     run(ctx, p) {
-      need(Number(p.qty) > 0, 'qty must be positive');
+      need(Number(p.qty) > 0 && Number(p.qty) <= 1e9, 'qty must be positive');
       const row = ctx.transferStock(Number(p.product_id), Number(p.from), Number(p.to), ctx.num(p.qty));
       need(row, 'transfer rejected: check warehouses and availability');
       return { move: row };
@@ -695,7 +704,7 @@ const OPS = {
         need(prod, 'product not found');
         const stock = prod.stock;            // stock is server-owned
         need(!(ctx.num(stock) > 0 && Math.abs(ctx.num(out.cost) - ctx.num(prod.cost)) > 1e-9),
-          `The cost cannot be changed while ${stock} unit(s) are in stock: the books value that stock at the old cost, so a silent change would make inventory disagree with accounting. Use "Revalue stock" (admin) to post a reviewed revaluation, or change the cost when stock is zero.`);
+          `The cost cannot be changed while ${stock} unit(s) are in stock: the books value that stock at the old cost, so a silent change would make inventory disagree with accounting. Revaluation of stock on hand is not supported yet. Change the cost when stock is zero; record damaged or lost stock with a stock adjustment.`);
         Object.assign(prod, out);
         prod.stock = stock;
         S.save();
@@ -716,33 +725,14 @@ const OPS = {
      send the exact adjustment amount they were shown (expected_value); a
      mismatch means the stock or cost moved since the review and nothing
      is posted. Gain/loss goes to Cost of goods sold, in its own entry. */
+  /* Stock revaluation / write-down is NOT supported yet. Overwriting the unit cost would lose the
+     acquisition cost that returns, COGS and production depend on, and the model has no valuation
+     allowance to carry the difference. The route stays registered so it is visible in the inventory
+     and fails with a clear message instead of a silent cost edit. */
   'product-revalue': {
     view: 'products',
-    run(ctx, p, user) {
-      need(user && user.role === 'admin', 'only an admin can revalue stock');
-      const S = ctx.store, r2 = v => Math.round(v * 100) / 100;
-      const prod = S.data.products.find(x => x.id === Number(p.id));
-      need(prod, 'product not found');
-      need(String(p.reason || '').trim().length >= 3, 'a reason is required');
-      const nc = Number(p.new_cost);
-      need(Number.isFinite(nc) && nc >= 0, 'new cost must be zero or more');
-      need(Math.abs(nc - ctx.num(prod.cost)) > 1e-9, 'the new cost equals the current cost; nothing to revalue');
-      const qty = ctx.num(prod.stock);
-      need(qty > 0, 'there is no stock on hand; just change the cost on the product');
-      need(nc < ctx.num(prod.cost), 'only write-downs are supported (inventory is carried at the lower of cost and net realisable value; no upward revaluation). A cost increase on stock needs an accountant-reviewed correction.');
-      const delta = r2(qty * (nc - ctx.num(prod.cost)));
-      need(Number.isFinite(Number(p.expected_value)) && Math.abs(Number(p.expected_value) - delta) < 0.005,
-        `the adjustment is now ${delta.toFixed(2)} (stock ${qty} x cost change), not the reviewed amount; review it again`);
-      need(Math.abs(delta) > 0.004, 'the adjustment rounds to zero');
-      ctx.ensureCOA();
-      const inv = ctx.accountByCode('1200').id, cogs = ctx.accountByCode('5000').id;
-      const lines = delta > 0 ? [{ account_id: inv, debit: delta }, { account_id: cogs, credit: delta }] : [{ account_id: cogs, debit: -delta }, { account_id: inv, credit: -delta }];
-      const je = ctx.postJournal({ date: ctx.todayStr(), memo: `Inventory write-down to lower of cost and NRV: ${prod.name} (${p.reason})`, ref_type: 'revaluation', ref_id: prod.id, lines });
-      need(je, 'revaluation could not be posted');
-      prod.cost_history = (prod.cost_history || []).concat([{ date: ctx.todayStr(), from: ctx.num(prod.cost), to: nc, qty, value: delta, by: user.username, reason: String(p.reason).trim(), journal_id: je.id }]);
-      prod.cost = nc;
-      S.save();
-      return { product: prod, adjustment: delta, journal_id: je.id };
+    run() {
+      need(false, 'Stock revaluation and write-downs are not supported yet: changing the cost of stock on hand would lose the original purchase cost that returns, COGS and production rely on. Record damaged or lost stock with a stock adjustment (reason required) instead.');
     },
   },
 
@@ -963,7 +953,7 @@ const OPS = {
         if (!cid) continue;
         need(cid !== prod.id, 'a product cannot be its own component');
         need(S.data.products.some(x => x.id === cid), 'component product not found');
-        need(q > 0, 'component quantity must be positive');
+        need(q > 0 && q <= 1e9, 'component quantity must be positive');
         need(!bom.some(x => x.product_id === cid), 'duplicate component — combine the quantities into one line');
         const compProd = S.data.products.find(x => x.id === cid);
         need(!(compProd && Array.isArray(compProd.bom) && compProd.bom.length), `multi-level recipes are not supported — ${compProd ? compProd.name : cid} has its own bill of materials`);
@@ -979,6 +969,8 @@ const OPS = {
         return (f && Array.isArray(f.bom) ? f.bom : []).some(l => reaches(l.product_id, targetId, seen));
       };
       for (const l of bom) need(!reaches(l.product_id, prod.id, new Set()), 'circular recipe — a component already contains this product in its own bill of materials');
+      /* single-level only, both ways: a product that is already a component elsewhere cannot get its own recipe */
+      need(!bom.length || !S.data.products.some(x => x.id !== prod.id && Array.isArray(x.bom) && x.bom.some(l => l.product_id === prod.id)), `multi-level recipes are not supported: ${prod.name} is already a component of another product`);
       prod.bom = bom;
       S.save();
       return { product_id: prod.id, bom };
@@ -1005,7 +997,7 @@ const OPS = {
       const prod = S.data.products.find(x => x.id === Number(p.product_id));
       need(prod, 'product not found');
       const qty = ctx.num(p.qty);
-      need(qty > 0, 'quantity must be positive');
+      need(qty > 0 && qty <= 1e9, 'quantity must be positive');
       need(Array.isArray(prod.bom) && prod.bom.length, 'product has no bill of materials');
       for (const l of prod.bom) {
         const comp = S.data.products.find(x => x.id === l.product_id);

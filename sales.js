@@ -59,7 +59,6 @@ function renderProducts() {
       <td>${money(p.cost)}</td>
       <td>${isLow ? `<span class="badge high">${num(p.stock)} · ${t('low')}</span>` : num(p.stock)}</td>
       <td class="row-actions">
-        ${(typeof Auth !== 'undefined' && Auth.current && Auth.current.role === 'admin' && inServerMode() && num(p.stock) > 0) ? `<button class="icon-btn" data-act="reval" data-id="${p.id}" title="${t('Revalue stock')}">⚖️</button>` : ''}
         <button class="icon-btn" data-act="edit" data-id="${p.id}" title="${t('Edit')}">✏️</button>
         <button class="danger-btn" data-act="del" data-id="${p.id}" title="${t('Delete')}">🗑</button>
       </td>
@@ -83,7 +82,6 @@ function renderProducts() {
     const id = Number(btn.dataset.id);
     const row = store.product(id);
     if (btn.dataset.act === 'edit') editProduct(row);
-    if (btn.dataset.act === 'reval') { openRevalue(row); return; }
     if (btn.dataset.act === 'del') confirmDelete(`${t('product')} "${row.name}"`, () => {
       if (inServerMode()) { txCall('product-delete', { id }, t('Product deleted')); return; }
       store.remove('products', id); toast(t('Product deleted'));
