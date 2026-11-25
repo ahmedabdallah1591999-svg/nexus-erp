@@ -12,8 +12,18 @@ function invoicePaidAmount(inv) {
   if (inv.paid_amount != null) return num(inv.paid_amount);
   return inv.status === 'paid' ? invoiceTotal(inv) : 0;   // pre-payments rows
 }
+/* everything credited back against an invoice: credit notes (credited_amount)
+   plus sales-order returns recorded against it. Derived from the returns
+   already stored, so old data needs no migration and no history is rewritten. */
+function invoiceCreditedTotal(inv) {
+  const rets = (store.data.returns || []).filter(r => r.invoice_id === inv.id).reduce((s, r) => s + num(r.amount), 0);
+  return Math.round((num(inv.credited_amount) + rets) * 100) / 100;
+}
+function invoiceNetTotal(inv) {
+  return Math.max(0, Math.round((invoiceTotal(inv) - invoiceCreditedTotal(inv)) * 100) / 100);
+}
 function invoiceOpenAmount(inv) {
-  return Math.max(0, Math.round((invoiceTotal(inv) - num(inv.credited_amount) - invoicePaidAmount(inv)) * 100) / 100);
+  return Math.max(0, Math.round((invoiceTotal(inv) - invoiceCreditedTotal(inv) - invoicePaidAmount(inv)) * 100) / 100);
 }
 function purchasePaidAmount(po) {
   return num(po.paid_amount || 0);

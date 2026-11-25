@@ -11,8 +11,7 @@ Object.assign(I18N.ar, {
   'Settlement':'التسوية','Item':'بند','Credit note':'إشعار دائن','Credit notes':'إشعارات دائنة','Purchase return':'مرتجع مشتريات','Purchase returns':'مرتجعات المشتريات',
   'Reason (required)':'السبب (مطلوب)','Quantity to credit':'الكمية المراد إشعارها','Quantity to return':'الكمية المراد إرجاعها',
   'Put credited goods back in stock':'إرجاع البضاعة المرتجعة إلى المخزون','Yes':'نعم','No':'لا',
-  'Refund method (only if more than the open balance)':'طريقة الرد (فقط إذا زاد عن الرصيد المفتوح)',
-  'Refund method (only if the supplier already got paid)':'طريقة استرداد المورد (فقط إذا سُدد له سابقاً)',
+  'Money already paid back to the customer? (needed only if they already paid)':'هل رُدّ المبلغ فعلياً للعميل؟ (مطلوب فقط إذا كان قد دفع)','Money already received back from the supplier? (needed only if we already paid)':'هل استُرد المبلغ فعلياً من المورد؟ (مطلوب فقط إذا كنا قد دفعنا)','No, nothing moved':'لا، لم تتحرك أموال','Yes, it was paid back':'نعم، تم الرد','Yes, it was received':'نعم، تم الاستلام','Refund method':'طريقة الرد','Refund reference (transfer / receipt no.)':'مرجع الرد (رقم التحويل / الإيصال)',
   'Credit note posted':'تم ترحيل الإشعار الدائن','Purchase return posted':'تم ترحيل مرتجع المشتريات',
   'Corrections need the server.':'التصحيحات تحتاج الخادم.','Nothing left to credit':'لا شيء متبقٍ للإشعار','Nothing left to return':'لا شيء متبقٍ للإرجاع',
   'credited':'مُشعَر دائناً','No credit notes yet.':'لا توجد إشعارات دائنة بعد.','No purchase returns yet.':'لا توجد مرتجعات مشتريات بعد.',
@@ -20,6 +19,21 @@ Object.assign(I18N.ar, {
   'Posts a numbered credit note with its own reversing entries. The invoice is not edited.':'يُرحَّل إشعار دائن مرقم بقيوده العكسية. لا تُعدَّل الفاتورة.',
   'Posts a numbered return with its own entries and stock move. The purchase is not edited.':'يُرحَّل مرتجع مرقم بقيوده وحركة مخزون. لا يُعدَّل أمر الشراء.',
 });
+
+/* A refund is money that actually moved, not a method choice. These fields
+   only matter when the credit is MORE than what is still owed; otherwise the
+   server needs none of them. Without a confirmed refund the server blocks. */
+function refundFields(side) {
+  const c = side === 'customer';
+  return [
+    { key: 'refund_confirmed', type: 'select', label: t(c ? 'Money already paid back to the customer? (needed only if they already paid)' : 'Money already received back from the supplier? (needed only if we already paid)'), options: [{ value: 'no', label: t('No, nothing moved') }, { value: 'yes', label: t(c ? 'Yes, it was paid back' : 'Yes, it was received') }] },
+    { key: 'refund_method', type: 'select', label: t('Refund method'), allowEmpty: '—', options: PAYMENT_METHODS.map(m => ({ value: m, label: m })) },
+    { key: 'refund_reference', label: t('Refund reference (transfer / receipt no.)'), value: '' },
+  ];
+}
+function refundPayload(out) {
+  return out.refund_confirmed === 'yes' ? { refund_confirmed: true, refund_method: out.refund_method || undefined, refund_reference: out.refund_reference || '' } : {};
+}
 
 function creditedQtyByLine(inv) {
   const m = {};
@@ -42,13 +56,13 @@ function openCreditNote(inv) {
   const fields = [
     ...lines.map(x => ({ key: 'q' + x.i, type: 'number', label: `${t('Quantity to credit')}: ${x.it.description || (store.product(x.it.product_id) || {}).name || t('Item')} (${t('Left to credit')} ${x.left})`, value: 0 })),
     { key: 'restock', type: 'select', label: t('Put credited goods back in stock'), options: [{ value: 'no', label: t('No') }, { value: 'yes', label: t('Yes') }] },
-    { key: 'refund_method', type: 'select', label: t('Refund method (only if more than the open balance)'), allowEmpty: '—', options: PAYMENT_METHODS.map(m => ({ value: m, label: m })) },
+    ...refundFields('customer'),
     { key: 'reason', label: t('Reason (required)'), required: true, full: true },
   ];
   openModal(`${t('Credit note')} — ${inv.number}`, fields, out => {
     const items = lines.map(x => ({ line: x.i, qty: num(out['q' + x.i]), restock: out.restock === 'yes' })).filter(x => x.qty > 0);
     if (!items.length) { toast(t('Nothing to return')); return; }
-    txCall('credit-note-create', { invoice_id: inv.id, items, reason: out.reason, refund_method: out.refund_method || undefined,
+    txCall('credit-note-create', { invoice_id: inv.id, items, reason: out.reason, ...refundPayload(out),
       client_ref: 'cn-' + inv.id + '-' + Date.now() }, t('Credit note posted'));
     closeModal();
   });
@@ -61,13 +75,13 @@ function openPurchaseReturn(po) {
   if (!lines.length) { toast(t('Nothing left to return')); return; }
   const fields = [
     ...lines.map(x => ({ key: 'q' + x.i, type: 'number', label: `${t('Quantity to return')}: ${x.it.description || (store.product(x.it.product_id) || {}).name || t('Item')} (${t('Left to return')} ${x.left})`, value: 0 })),
-    { key: 'refund_method', type: 'select', label: t('Refund method (only if the supplier already got paid)'), allowEmpty: '—', options: PAYMENT_METHODS.map(m => ({ value: m, label: m })) },
+    ...refundFields('supplier'),
     { key: 'reason', label: t('Reason (required)'), required: true, full: true },
   ];
   openModal(`${t('Return to supplier')} — ${po.number}`, fields, out => {
     const items = lines.map(x => ({ line: x.i, qty: num(out['q' + x.i]) })).filter(x => x.qty > 0);
     if (!items.length) { toast(t('Nothing to return')); return; }
-    txCall('purchase-return-create', { purchase_id: po.id, items, reason: out.reason, refund_method: out.refund_method || undefined,
+    txCall('purchase-return-create', { purchase_id: po.id, items, reason: out.reason, ...refundPayload(out),
       client_ref: 'pr-' + po.id + '-' + Date.now() }, t('Purchase return posted'));
     closeModal();
   });

@@ -176,7 +176,11 @@ function returnModal(o) {
       <input type="number" class="ret-qty" data-i="${i}" min="0" max="${max}" step="any" value="0"></div>`;
   }).join('');
   openModal(`${t('Create return')} — ${o.number}`, [{ key: '_info', label: t('Quantities to return'), type: 'info' }], () => {});
-  $('#modalForm').innerHTML = `<div class="form-grid">${lines}</div>
+  const refundHtml = inServerMode() ? `<div class="field"><label>${t('Money already paid back to the customer? (needed only if they already paid)')}</label>
+      <select id="retConfirm"><option value="no">${t('No, nothing moved')}</option><option value="yes">${t('Yes, it was paid back')}</option></select></div>
+    <div class="field"><label>${t('Refund method')}</label><select id="retMethod"><option value="">—</option>${PAYMENT_METHODS.map(m => `<option value="${m}">${m}</option>`).join('')}</select></div>
+    <div class="field"><label>${t('Refund reference (transfer / receipt no.)')}</label><input id="retRef"></div>` : '';
+  $('#modalForm').innerHTML = `<div class="form-grid">${lines}${refundHtml}</div>
     <div class="modal-actions"><button type="button" class="secondary-btn" id="modalCancel">${t('Cancel')}</button>
     <button type="submit" class="primary-btn">${t('Create return')}</button></div>`;
   $('#modalCancel').onclick = closeModal;
@@ -190,7 +194,9 @@ function returnModal(o) {
       }
     });
     if (!items.length) { alert(t('Nothing to return')); return; }
-    createReturn(o, items);
+    const refund = (inServerMode() && $('#retConfirm') && $('#retConfirm').value === 'yes')
+      ? { refund_confirmed: true, refund_method: $('#retMethod').value || undefined, refund_reference: $('#retRef').value } : {};
+    createReturn(o, items, refund);
     closeModal();
     render();
   };
@@ -198,35 +204,48 @@ function returnModal(o) {
 
 /* The return transaction: stock back in, revenue + VAT reversed, COGS
    reversed, and the money side credited to AR (unpaid) or cash (paid). */
-function createReturn(o, items) {
-  if (inServerMode()) { txCall('return-create', { id: o.id, items }, `${t('Return posted for')} ${o.number}`); return; }
+function createReturn(o, items, refund) {
+  if (inServerMode()) { txCall('return-create', { id: o.id, items, ...(refund || {}) }, `${t('Return posted for')} ${o.number}`); return; }
+  /* single-user browser mode: a refund of money the customer already paid
+     is only posted once the user confirms it was really paid back */
+  const sp = returnSplit(o, items);
+  if (sp.toCash > 0.005 && !window.confirm(`${t('Money already paid back to the customer? (needed only if they already paid)')} ${money(sp.toCash)}`)) return;
   applyReturnEffects(o, items);
   toast(`${t('Return posted for')} ${o.number}`);
 }
 
 /* Shared by the local path and (inside the sandbox) the server path. */
-function applyReturnEffects(o, items) {
+/* How a return splits: the part that reduces what the customer still owes
+   (toAR) and the part that is MORE than they owe, i.e. money they already
+   paid (toCash). toCash is only a refund once someone confirms it was paid. */
+function returnSplit(o, items) {
+  const sub = Math.round(items.reduce((s, it) => s + num(it.qty) * num(it.price), 0) * 100) / 100;
+  const tax = Math.round(sub * num(o.tax_rate) / 100 * 100) / 100;
+  const total = Math.round((sub + tax) * 100) / 100;
+  const inv = o.invoice_id ? store.invoice(o.invoice_id) : null;
+  const open = inv ? invoiceOpenAmount(inv) : 0;
+  const toAR = Math.round(Math.min(total, open) * 100) / 100;
+  return { sub, tax, total, toAR, toCash: Math.round((total - toAR) * 100) / 100 };
+}
+
+function applyReturnEffects(o, items, opts) {
+  const split = returnSplit(o, items);   // computed before the new return row exists
   const ret = {
     number: nextReturnNumber(), order_id: o.id, invoice_id: o.invoice_id || null,
     date: todayStr(), items,
   };
   applyStock(items, +1, { reason: 'return', ref_type: 'return', ref_id: null });
-  const sub = Math.round(items.reduce((s, it) => s + num(it.qty) * num(it.price), 0) * 100) / 100;
-  const tax = Math.round(sub * num(o.tax_rate) / 100 * 100) / 100;
-  const total = Math.round((sub + tax) * 100) / 100;
+  const { sub, tax, total, toAR, toCash } = split;
   ret.amount = total;
+  if (toCash > 0.005 && opts && opts.method) { ret.refund_method = opts.method; ret.refund_reference = opts.reference || ''; ret.refund_confirmed_by = opts.by || null; }
   const row = store.add('returns', ret);
   // fix stock-move refs now that the return has an id
   store.data.stock_moves.filter(m => m.reason === 'return' && m.ref_id == null).forEach(m => { m.ref_id = row.id; });
   ensureCOA();
-  const inv = o.invoice_id ? store.invoice(o.invoice_id) : null;
-  const open = inv ? invoiceOpenAmount(inv) : 0;
-  const toAR = Math.min(total, open);
-  const toCash = Math.round((total - toAR) * 100) / 100;
   const lines = [{ account_id: accountByCode('4000').id, debit: sub }];
   if (tax > 0) lines.push({ account_id: accountByCode('2100').id, debit: tax });
   if (toAR > 0) lines.push({ account_id: accountByCode('1100').id, credit: Math.round(toAR * 100) / 100 });
-  if (toCash > 0) lines.push({ account_id: accountByCode('1000').id, credit: toCash });
+  if (toCash > 0) lines.push({ account_id: (opts && opts.method) ? settlementAccountId(opts.method) : accountByCode('1000').id, credit: toCash });
   postJournal({ date: ret.date, memo: `${t('Return')} ${ret.number} (${o.number})`, ref_type: 'return', ref_id: row.id, lines });
   const cogs = Math.round(items.reduce((s, it) => {
     const p = it.product_id ? store.product(it.product_id) : null;

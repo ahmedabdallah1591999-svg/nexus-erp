@@ -197,7 +197,7 @@ function buildChartSpecs() {
   const byMonth = {};
   d.invoices.filter(i => i.status === 'paid').forEach(i => {
     const m = (i.issue_date || '').slice(0, 7) || '—';
-    byMonth[m] = (byMonth[m] || 0) + invoiceTotal(i);
+    byMonth[m] = (byMonth[m] || 0) + invoiceNetTotal(i);
   });
   const sales = Object.keys(byMonth).sort().map(m => [m, Math.round(byMonth[m] * 100) / 100]);
   if (sales.length && Auth.can('invoices')) blocks.push({ title: t('Sales by month (paid invoices)'), entries: sales, color: '4F46E5', view: 'invoices' });
@@ -270,8 +270,8 @@ function exportSheets() {
   const totals = monthTotals(monthStr());
   const openVal = d.deals.filter(x => OPEN_STAGES.includes(x.stage)).reduce((s, x) => s + num(x.value), 0);
   const wonVal = d.deals.filter(x => x.stage === 'Won').reduce((s, x) => s + num(x.value), 0);
-  const outstanding = d.invoices.filter(i => i.status !== 'paid').reduce((s, i) => s + invoiceTotal(i), 0);
-  const revenue = d.invoices.filter(i => i.status === 'paid').reduce((s, i) => s + invoiceTotal(i), 0);
+  const outstanding = d.invoices.filter(i => i.status !== 'paid').reduce((s, i) => s + (i.status === 'draft' ? invoiceTotal(i) : invoiceOpenAmount(i)), 0);
+  const revenue = d.invoices.filter(i => i.status === 'paid').reduce((s, i) => s + invoiceNetTotal(i), 0);
   const won = d.deals.filter(x => x.stage === 'Won').length;
   const lost = d.deals.filter(x => x.stage === 'Lost').length;
 

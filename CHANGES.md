@@ -22,3 +22,12 @@ Not changed / still open: Windows scripts were reviewed but never run on Windows
 - Both are retry-safe (same request twice posts once), reject over-crediting, need a reason, and cannot be forged through the generic data save.
 - A fully credited invoice cannot be marked paid. A sales-order return and a credit note on the same invoice are blocked to avoid crediting twice.
 - Not built: partial receipts, valuation change with stock on hand, voiding a credit note, supplier credit balances, credit note printing/export.
+
+## Hotfix 3: sales-order returns reconciled, refunds must be confirmed (server mode, Linux-tested only)
+
+- FLAW FIXED (present since before hotfix1): the server priced a sales-order return from the price sent by the browser, so a forged request could return at an inflated price and credit/refund too much. The server now prices returns from the order lines.
+- FLAW FIXED: a return on an already-paid invoice posted a cash refund automatically. A refund is now recorded only when the reviewer confirms the money was really paid back (yes/no) and enters a method and a reference. Otherwise the request is blocked with a plain message; nothing is posted. Same rule for credit notes and for supplier refunds on purchase returns. There are no credit balances yet, so unconfirmed over-credit cases are blocked, never posted.
+- Sales-order returns now reduce the invoice open amount (before, the journal fell but the invoice still showed the full balance, so payments, aging, dashboard and reports disagreed). Old returns count automatically (derived from stored returns; no data rewritten, no reset).
+- Credit notes and sales-order returns on the same invoice are allowed together, capped by the invoiced quantity per product.
+- Dashboard, Excel export and finance reports use open amount / net of credits.
+- Local single-user browser mode asks for a confirm() before posting a refund of money already paid.

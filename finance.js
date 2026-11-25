@@ -310,7 +310,7 @@ function renderReports() {
   const byMonth = {};
   d.invoices.filter(i => i.status === 'paid').forEach(i => {
     const m = (i.issue_date || '').slice(0, 7) || 'unknown';
-    byMonth[m] = (byMonth[m] || 0) + invoiceTotal(i);
+    byMonth[m] = (byMonth[m] || 0) + invoiceNetTotal(i);
   });
   const months = Object.keys(byMonth).sort();
   const maxMonth = Math.max(1, ...months.map(m => byMonth[m]));
@@ -355,7 +355,7 @@ function renderReports() {
     <div class="view-head"><div><h2>${t('Reports')}</h2><div class="sub">${t('Across sales, pipeline, products and spending')}</div></div></div>
     <div class="cards">
       <div class="stat-card"><div class="label">${t('Win rate')}</div><div class="value">${winRate}%</div><div class="hint">${won} ${t('won')} · ${lost} ${t('lost')}</div></div>
-      <div class="stat-card"><div class="label">${t('Revenue (paid invoices)')}</div><div class="value">${money0(d.invoices.filter(i => i.status === 'paid').reduce((s, i) => s + invoiceTotal(i), 0))}</div></div>
+      <div class="stat-card"><div class="label">${t('Revenue (paid invoices)')}</div><div class="value">${money0(d.invoices.filter(i => i.status === 'paid').reduce((s, i) => s + invoiceNetTotal(i), 0))}</div></div>
       <div class="stat-card"><div class="label">${t('Stock value (at cost)')}</div><div class="value">${money0(d.products.reduce((s, p) => s + num(p.cost) * num(p.stock), 0))}</div></div>
       <div class="stat-card"><div class="label">${t('Monthly payroll')}</div><div class="value">${money0(d.employees.filter(e => e.status === 'active').reduce((s, e) => s + num(e.salary), 0))}</div></div>
     </div>

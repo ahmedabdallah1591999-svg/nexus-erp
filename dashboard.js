@@ -9,7 +9,7 @@ function renderDashboard() {
   const openTasks = d.tasks.filter(x => !x.done);
   const td = todayStr();
   const overdue = openTasks.filter(x => x.due_date && x.due_date < td).length;
-  const receivable = d.invoices.filter(i => i.status !== 'paid').reduce((s, i) => s + invoiceTotal(i), 0);
+  const receivable = d.invoices.filter(i => i.status !== 'paid').reduce((s, i) => s + (i.status === 'draft' ? invoiceTotal(i) : invoiceOpenAmount(i)), 0);
   const lowStock = d.products.filter(p => num(p.reorder_level) > 0 && num(p.stock) <= num(p.reorder_level));
   const totals = monthTotals(monthStr());
 
