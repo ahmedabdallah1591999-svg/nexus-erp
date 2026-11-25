@@ -36,7 +36,7 @@ function purchaseOpenAmount(po) {
    direction 'in': money from a customer against an invoice.
    direction 'out': money to a supplier against a purchase. */
 function settlementAccountId(method) {
-  if (method === 'store_credit') return accountByCode('2150').id;   // only reachable through credit-apply
+  if (method === 'store_credit') return accountByCode('2150').id;   // customer credit; reachable only through credit-apply
   /* cash settles into the till (1000); bank, transfer and card settle into
      the bank account (1010) — mixing them would break cash reconciliation.
      Anything missing or unknown keeps the historical cash account: legacy
@@ -47,7 +47,9 @@ function settlementAccountId(method) {
 function recordPayment({ direction, contact_id, supplier_id, ref_type, ref_id, amount, method, date, memo }, internal) {
   /* an explicit method must be a known one — a typo must not quietly pick
      a settlement account; a missing method is legacy data and stays cash */
-  if (method != null && method !== '' && !PAYMENT_METHODS.includes(method) && !(internal === 'credit-apply' && method === 'store_credit')) return null;
+  if (method != null && method !== '' && !PAYMENT_METHODS.includes(method) && !(['credit-apply', 'supplier-credit-apply'].includes(internal) && method === 'store_credit')) return null;
+  /* store_credit is only valid through its own reviewed action and only on the matching side */
+  if (method === 'store_credit' && !((direction === 'in' && internal === 'credit-apply') || (direction === 'out' && internal === 'supplier-credit-apply'))) return null;
   method = method || 'cash';
   amount = Math.round(num(amount) * 100) / 100;
   if (!(amount > 0)) return null;
@@ -85,7 +87,7 @@ function recordPayment({ direction, contact_id, supplier_id, ref_type, ref_id, a
     if (amount > open + 0.005) return null;
     journal = postJournal({
       date, memo: memo || `${t('Payment to supplier for')} ${po.number}`, ref_type: 'payment', ref_id: null,
-      lines: [{ account_id: accountByCode('2000').id, debit: amount }, { account_id: settlementAccountId(method), credit: amount }],
+      lines: [{ account_id: accountByCode('2000').id, debit: amount }, { account_id: method === 'store_credit' ? accountByCode('1150').id : settlementAccountId(method), credit: amount }],
     });
     if (!journal) return null;
     po.paid_amount = Math.round((purchasePaidAmount(po) + amount) * 100) / 100;

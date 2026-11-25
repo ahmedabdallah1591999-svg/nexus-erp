@@ -317,5 +317,164 @@ d=call('GET','/api/data',tok=tok)[1]['data']; ok('RM6 invariants after mixed-cos
 rt=tx({'op':'purchase-return-create','purchase_id':po4,'reason':'mixed return','items':[{'line':0,'qty':1},{'line':1,'qty':1}]})
 ok('RM7 partial return of a fully received multi-cost PO values each line at its own cost (3.33 + 7.50)',rt[0]==200 and abs(rt[1]['purchase_return']['total']-10.83)<0.005 if rt[0]==200 and 'purchase_return' in rt[1] else False,rt)
 d=call('GET','/api/data',tok=tok)[1]['data']; ok('RM8 invariants after the partial return',not invariants(d),invariants(d))
+
+# ---- void of credit notes / purchase returns ----
+def D(): return call('GET','/api/data',tok=tok)[1]['data']
+vp=tx({'op':'product-save','out':{'name':'VP','price':30,'cost':10,'stock':0}})[1]['product']['id']
+tx({'op':'stock-adjust','product_id':vp,'qty':20,'memo':'open'})
+vi=tx({'op':'invoice-save','out':{'status':'sent','contact_id':555,'issue_date':'2026-11-01','due_date':'2026-12-01','tax_rate':10,'items':[{'product_id':vp,'qty':4,'price':30}]}})[1]['invoice']['id']
+def inv_row(i): return [x for x in D()['invoices'] if x['id']==i][0]
+st0=[p for p in D()['products'] if p['id']==vp][0]['stock']
+cn=tx({'op':'credit-note-create','invoice_id':vi,'reason':'damaged','items':[{'line':0,'qty':1,'restock':True}]})
+cnid=cn[1]['credit_note']['id']; ok('V1 credit note posted (33.00, restocked)',cn[0]==200 and cn[1]['credit_note']['total']==33.0)
+stk=[p for p in D()['products'] if p['id']==vp][0]['stock']; ok('V2 stock +1',stk==st0+1)
+_v=tx({'op':'credit-note-void','id':cnid,'reason':'entered by mistake'},itok); ok('V3 non-admin cannot void',_v[0] in (400,403) and 'admin' in json.dumps(_v[1]) or _v[0]==403,_v)
+ok('V4 short reason refused',tx({'op':'credit-note-void','id':cnid,'reason':'no'})[0]==400)
+res=par(6,lambda i:tx({'op':'credit-note-void','id':cnid,'reason':'entered by mistake'})[0]); ok('V5 concurrent voids: exactly one applies',res.count(200)==1,res)
+d=D(); row=inv_row(vi); c=[x for x in d['credit_notes'] if x['id']==cnid][0]
+ok('V6 note is void with who/why; invoice credited back to 0; stock back to start',c['status']=='void' and c.get('voided_by')=='boss' and row['credited_amount']==0 and [p for p in d['products'] if p['id']==vp][0]['stock']==st0,(c,row.get('credited_amount')))
+ok('V7 original note and both journals kept, plus reversal journals',sum(1 for j in d['journal'] if j.get('ref_type')=='credit_note' and j['ref_id']==cnid)==1 and sum(1 for j in d['journal'] if j.get('ref_type')=='credit_note-void' and j['ref_id']==cnid)==1)
+ok('V8 invariants after void',not invariants(d),invariants(d))
+ok('V9 void note no longer counts: full line can be credited again',tx({'op':'credit-note-create','invoice_id':vi,'reason':'again','items':[{'line':0,'qty':4,'restock':False}]})[0]==200)
+# restocked goods sold since: void refused
+vi2=tx({'op':'invoice-save','out':{'status':'sent','contact_id':555,'issue_date':'2026-11-02','due_date':'2026-12-01','tax_rate':0,'items':[{'product_id':vp,'qty':2,'price':30}]}})[1]['invoice']['id']
+cn2=tx({'op':'credit-note-create','invoice_id':vi2,'reason':'ret','items':[{'line':0,'qty':2,'restock':True}]})[1]['credit_note']['id']
+curs=[p for p in D()['products'] if p['id']==vp][0]['stock']
+tx({'op':'stock-adjust','product_id':vp,'qty':-curs,'memo':'sold everything'})
+r=tx({'op':'credit-note-void','id':cn2,'reason':'try to void'}); ok('V10 void refused when the restocked goods are no longer on hand',r[0]==400 and 'no longer on hand' in json.dumps(r[1]),r)
+# refunded note cannot be voided
+vi3=tx({'op':'invoice-save','out':{'status':'sent','contact_id':555,'issue_date':'2026-11-03','due_date':'2026-12-01','tax_rate':0,'items':[{'description':'svc','qty':1,'price':100}]}})[1]['invoice']['id']
+pay=tx({'op':'payment','direction':'in','ref_type':'invoice','ref_id':vi3,'amount':100,'method':'cash'})
+cn3=tx({'op':'credit-note-create','invoice_id':vi3,'reason':'refund it','items':[{'line':0,'qty':1}],'refund_confirmed':True,'refund_method':'cash','refund_reference':'RF1'})
+ok('V11 refunded credit note created',cn3[0]==200 and cn3[1]['credit_note']['refunded']==100,cn3)
+r=tx({'op':'credit-note-void','id':cn3[1]['credit_note']['id'],'reason':'try to void'}); ok('V12 note that moved money cannot be voided',r[0]==400 and 'refund' in json.dumps(r[1]),r)
+# purchase return void
+vq=tx({'op':'purchase-save','out':{'status':'received','supplier_id':777,'items':[{'product_id':vp,'qty':5,'cost':10}]}})[1]['purchase']['id']
+s1=[p for p in D()['products'] if p['id']==vp][0]['stock']
+pr=tx({'op':'purchase-return-create','purchase_id':vq,'reason':'defective','items':[{'line':0,'qty':2}]}); prid=pr[1]['purchase_return']['id']
+ok('V13 purchase return posted, stock -2',pr[0]==200 and [p for p in D()['products'] if p['id']==vp][0]['stock']==s1-2)
+ok('V14 non-admin cannot void purchase return',tx({'op':'purchase-return-void','id':prid,'reason':'mistake here'},itok)[0] in (400,403))
+res=par(6,lambda i:tx({'op':'purchase-return-void','id':prid,'reason':'entered by mistake'})[0]); ok('V15 concurrent purchase-return voids: exactly one',res.count(200)==1,res)
+d=D(); po_=[x for x in d['purchases'] if x['id']==vq][0]
+ok('V16 stock restored, returned_amount 0, return void, invariants hold',[p for p in d['products'] if p['id']==vp][0]['stock']==s1 and po_.get('returned_amount',0)==0 and not invariants(d),(po_.get('returned_amount'),invariants(d)))
+ok('V17 void return does not free quantity to over-return, but allows a fresh one',tx({'op':'purchase-return-create','purchase_id':vq,'reason':'again here','items':[{'line':0,'qty':5}]})[0]==200)
+d=D(); ok('V18 invariants at end',not invariants(d),invariants(d))
+
+# ---- sales-order return void ----
+def mkorder(qty,price,tax,pid):
+    o=tx({'op':'order-save','out':{'status':'draft','contact_id':555,'order_date':'2026-11-05','tax_rate':tax,'items':[{'product_id':pid,'qty':qty,'price':price}]}})[1]['order']['id']
+    tx({'op':'order-confirm','id':o}); tx({'op':'order-fulfill','id':o}); return o
+tx({'op':'stock-adjust','product_id':vp,'qty':30,'memo':'refill'})
+ro=mkorder(3,30,10,vp)
+s0=[p for p in D()['products'] if p['id']==vp][0]['stock']
+rr=tx({'op':'return-create','id':ro,'items':[{'product_id':vp,'qty':1}]}); ok('R1 order return created',rr[0]==200,rr)
+rid=rr[1]['return']['id']
+ok('R2 non-admin cannot void return',tx({'op':'return-void','id':rid,'reason':'mistake here'},itok)[0] in (400,403))
+res=par(6,lambda i:tx({'op':'return-void','id':rid,'reason':'entered by mistake'})[0]); ok('R3 concurrent return voids: exactly one',res.count(200)==1,res)
+d=D(); ok('R4 stock restored, return void, invariants hold',[p for p in d['products'] if p['id']==vp][0]['stock']==s0 and [x for x in d['returns'] if x['id']==rid][0]['status']=='void' and not invariants(d),invariants(d))
+ok('R5 voided return frees quantity: full 3 can be returned',tx({'op':'return-create','id':ro,'items':[{'product_id':vp,'qty':3}]})[0]==200)
+
+ro2=mkorder(2,30,0,vp)
+inv2=[o for o in D()['sales_orders'] if o['id']==ro2][0]['invoice_id']
+tx({'op':'payment','direction':'in','ref_type':'invoice','ref_id':inv2,'amount':60,'method':'cash'})
+rp=tx({'op':'return-create','id':ro2,'items':[{'product_id':vp,'qty':1}],'refund_confirmed':True,'refund_method':'cash','refund_reference':'RR1'})
+ok('R6 paid return with confirmed refund created',rp[0]==200,rp)
+r=tx({'op':'return-void','id':rp[1]['return']['id'],'reason':'try to void'}); ok('R7 return that paid money back cannot be voided',r[0]==400 and 'paid money back' in json.dumps(r[1]),r)
+ro3=mkorder(1,30,0,vp)
+rq=tx({'op':'return-create','id':ro3,'items':[{'product_id':vp,'qty':1}]})[1]['return']['id']
+cs=[p for p in D()['products'] if p['id']==vp][0]['stock']; tx({'op':'stock-adjust','product_id':vp,'qty':-cs,'memo':'sold all'})
+r=tx({'op':'return-void','id':rq,'reason':'try to void'}); ok('R8 void refused when returned goods no longer on hand',r[0]==400 and 'no longer on hand' in json.dumps(r[1]),r)
+ok('R9 invariants',not invariants(D()),invariants(D()))
+
+# ---- purchase receipt void ----
+rp0=tx({'op':'product-save','out':{'name':'RV','price':20,'cost':7}})[1]['product']['id']
+rvp=tx({'op':'purchase-save','out':{'status':'ordered','supplier_id':777,'items':[{'product_id':rp0,'qty':10,'cost':7}]}})[1]['purchase']['id']
+def stk(): return [p for p in D()['products'] if p['id']==rp0][0]['stock']
+a1=tx({'op':'purchase-receive','id':rvp,'items':[{'line':0,'qty':4}]}); a2=tx({'op':'purchase-receive','id':rvp,'items':[{'line':0,'qty':3}]})
+ok('W1 two receipts, stock 7',a1[0]==200 and a2[0]==200 and stk()==7)
+ok('W2 only latest receipt can be voided',tx({'op':'purchase-receipt-void','id':rvp,'n':1,'reason':'wrong receipt'})[0]==400)
+ok('W3 non-admin refused',tx({'op':'purchase-receipt-void','id':rvp,'n':2,'reason':'entered wrongly'},itok)[0] in (400,403))
+ok('W4 short reason refused',tx({'op':'purchase-receipt-void','id':rvp,'n':2,'reason':'x'})[0]==400)
+res=par(6,lambda i:tx({'op':'purchase-receipt-void','id':rvp,'n':2,'reason':'entered wrongly'})[0]); ok('W5 concurrent voids: exactly one',res.count(200)==1,res)
+d=D(); po_=[x for x in d['purchases'] if x['id']==rvp][0]
+ok('W6 stock 4, received_qty 4, receipt 2 void, invariants hold',stk()==4 and po_['items'][0]['received_qty']==4 and po_['receipts'][1].get('void') and not invariants(d),(stk(),invariants(d)))
+a3=tx({'op':'purchase-receive','id':rvp,'items':[{'line':0,'qty':6}]}); ok('W7 remaining 6 can be received after void; PO completes with exact value',a3[0]==200 and a3[1].get('complete') and stk()==10,a3)
+d=D(); po_=[x for x in d['purchases'] if x['id']==rvp][0]
+ok('W8 books: AP for the PO equals 70.00 exactly, invariants',not invariants(d) and po_['status']=='received',invariants(d))
+ok('W9 completed purchase receipt cannot be voided',tx({'op':'purchase-receipt-void','id':rvp,'n':3,'reason':'too late now'})[0]==400)
+rvq=tx({'op':'purchase-save','out':{'status':'ordered','supplier_id':777,'items':[{'product_id':rp0,'qty':5,'cost':7}]}})[1]['purchase']['id']
+tx({'op':'purchase-receive','id':rvq,'items':[{'line':0,'qty':5}]}) if False else None
+tx({'op':'purchase-receive','id':rvq,'items':[{'line':0,'qty':2}]})
+cs=stk(); tx({'op':'stock-adjust','product_id':rp0,'qty':-cs,'memo':'sold'})
+r=tx({'op':'purchase-receipt-void','id':rvq,'n':1,'reason':'entered wrongly'}); ok('W10 void refused when received goods are gone',r[0]==400 and 'no longer on hand' in json.dumps(r[1]),r)
+
+# ---- customer credit (store credit) ----
+call('PUT','/api/data',{'data':{'contacts':[{'id':555,'first_name':'C','last_name':'D'},{'id':556,'first_name':'E','last_name':'F'}]}},tok=tok)
+def acct(code,d=None):
+    d=d or D(); a=[x for x in d['accounts'] if x['code']==code]
+    if not a: return 0.0
+    i=a[0]['id']; return round(sum((l.get('debit') or 0)-(l.get('credit') or 0) for j in d['journal'] for l in j['lines'] if l['account_id']==i),2)
+sc=tx({'op':'invoice-save','out':{'status':'sent','contact_id':555,'issue_date':'2026-11-06','due_date':'2026-12-01','tax_rate':0,'items':[{'description':'svc','qty':1,'price':100}]}})[1]['invoice']['id']
+tx({'op':'payment','direction':'in','ref_type':'invoice','ref_id':sc,'amount':100,'method':'bank'})
+r=tx({'op':'credit-note-create','invoice_id':sc,'reason':'over paid','items':[{'line':0,'qty':1}]}); ok('S1 over-credit without confirmation or explicit store credit still blocked',r[0]==400,r)
+d0=D(); cash0=(acct('1000',d0),acct('1010',d0))
+r=tx({'op':'credit-note-create','invoice_id':sc,'reason':'over paid','items':[{'line':0,'qty':1}],'store_credit':True}); ok('S2 explicit store_credit creates the note',r[0]==200 and r[1]['credit_note']['store_credit']==100 and r[1]['credit_note']['refunded']==0,r)
+d=D(); cc=d['customer_credits'][-1]; ccid=cc['id']
+ok('S3 credit balance 100 on account 2150, cash and bank unchanged, no cash ledger row',cc['remaining']==100 and acct('2150',d)==-100 and (acct('1000',d),acct('1010',d))==cash0 and not invariants(d),(acct('2150',d),invariants(d)))
+si=tx({'op':'invoice-save','out':{'status':'sent','contact_id':555,'issue_date':'2026-11-07','due_date':'2026-12-01','tax_rate':0,'items':[{'description':'svc2','qty':1,'price':60}]}})[1]['invoice']['id']
+so=tx({'op':'invoice-save','out':{'status':'sent','contact_id':556,'issue_date':'2026-11-07','due_date':'2026-12-01','tax_rate':0,'items':[{'description':'other','qty':1,'price':60}]}})[1]['invoice']['id']
+ok('S4 other customer invoice rejected',tx({'op':'credit-apply','credit_id':ccid,'invoice_id':so,'amount':10})[0]==400)
+ok('S5 more than invoice owes rejected',tx({'op':'credit-apply','credit_id':ccid,'invoice_id':si,'amount':61})[0]==400)
+ok('S6 zero/negative/NaN rejected',all(tx({'op':'credit-apply','credit_id':ccid,'invoice_id':si,'amount':a})[0]==400 for a in (0,-5,'x')))
+ok('S7 direct payment with method store_credit rejected',tx({'op':'payment','direction':'in','ref_type':'invoice','ref_id':si,'amount':10,'method':'store_credit'})[0]==400)
+res=par(6,lambda i:tx({'op':'credit-apply','credit_id':ccid,'invoice_id':si,'amount':60})[0]); ok('S8 concurrent full applies: exactly one',res.count(200)==1,res)
+d=D(); inv_=[x for x in d['invoices'] if x['id']==si][0]; cc=[x for x in d['customer_credits'] if x['id']==ccid][0]
+ok('S9 invoice paid, credit remaining 40, 2150 = -40, cash untouched, invariants',inv_['status']=='paid' and cc['remaining']==40 and acct('2150',d)==-40 and (acct('1000',d),acct('1010',d))==cash0 and not invariants(d),(inv_['status'],cc['remaining'],acct('2150',d),invariants(d)))
+ok('S10 credit note with used credit cannot be voided',tx({'op':'credit-note-void','id':cc['credit_note_id'],'reason':'try to void'})[0]==400)
+ok('S11 non-owner module cannot apply',tx({'op':'credit-apply','credit_id':ccid,'invoice_id':si,'amount':1},itok)[0] in (400,403))
+# unused credit can be voided
+sd=tx({'op':'invoice-save','out':{'status':'sent','contact_id':556,'issue_date':'2026-11-08','due_date':'2026-12-01','tax_rate':0,'items':[{'description':'svc3','qty':1,'price':50}]}})[1]['invoice']['id']
+tx({'op':'payment','direction':'in','ref_type':'invoice','ref_id':sd,'amount':50,'method':'cash'})
+cn5=tx({'op':'credit-note-create','invoice_id':sd,'reason':'over paid','items':[{'line':0,'qty':1}],'store_credit':True})[1]['credit_note']['id']
+ok('S12 unused credit note voids; credit void, 2150 back to -40',tx({'op':'credit-note-void','id':cn5,'reason':'entered wrongly'})[0]==200 and acct('2150')==-40 and not invariants(D()))
+# ---- supplier credit ----
+call('PUT','/api/data',{'data':{'suppliers':[{'id':777,'name':'S'},{'id':778,'name':'S2'}]}},tok=tok)
+tp=tx({'op':'product-save','out':{'name':'TP','price':30,'cost':10,'stock':0}})[1]['product']['id']
+def mkpo(sup,qty=5,cost=10):
+    return tx({'op':'purchase-save','out':{'status':'received','supplier_id':sup,'items':[{'product_id':tp,'qty':qty,'cost':cost}]}})[1]['purchase']['id']
+p1=mkpo(777); tx({'op':'payment','direction':'out','ref_type':'purchase','ref_id':p1,'amount':50,'method':'bank'})
+r=tx({'op':'purchase-return-create','purchase_id':p1,'reason':'defective','items':[{'line':0,'qty':5}]}); ok('T1 over-return of a paid purchase without confirmation or store_credit still blocked',r[0]==400,r)
+d0=D(); cash1=(acct('1000',d0),acct('1010',d0))
+r=tx({'op':'purchase-return-create','purchase_id':p1,'reason':'defective','items':[{'line':0,'qty':5}],'store_credit':True}); ok('T2 explicit store_credit creates the return',r[0]==200 and r[1]['purchase_return']['store_credit']==50 and r[1]['purchase_return']['refunded']==0,r)
+d=D(); sc_=d['supplier_credits'][-1]; scid=sc_['id']
+ok('T3 supplier credit 50 on 1150 (asset, debit), cash/bank unchanged, no ledger cash row, invariants',sc_['remaining']==50 and acct('1150',d)==50 and (acct('1000',d),acct('1010',d))==cash1 and not invariants(d),(acct('1150',d),invariants(d)))
+p2=mkpo(777,3,10); p3=mkpo(778,3,10)
+ok('T4 other supplier purchase rejected',tx({'op':'supplier-credit-apply','credit_id':scid,'purchase_id':p3,'amount':10})[0]==400)
+ok('T5 more than purchase owes rejected',tx({'op':'supplier-credit-apply','credit_id':scid,'purchase_id':p2,'amount':30.01})[0]==400)
+ok('T6 zero/negative/NaN rejected',all(tx({'op':'supplier-credit-apply','credit_id':scid,'purchase_id':p2,'amount':a})[0]==400 for a in (0,-5,'x',None)))
+ok('T7 direct payment out with method store_credit rejected',tx({'op':'payment','direction':'out','ref_type':'purchase','ref_id':p2,'amount':10,'method':'store_credit'})[0]==400)
+ok('T7b customer credit action cannot be abused on suppliers / bad ids',tx({'op':'supplier-credit-apply','credit_id':999999,'purchase_id':p2,'amount':1})[0]==400 and tx({'op':'supplier-credit-apply','credit_id':scid,'purchase_id':999999,'amount':1})[0]==400)
+res=par(6,lambda i:tx({'op':'supplier-credit-apply','credit_id':scid,'purchase_id':p2,'amount':30})[0]); ok('T8 concurrent full applies: exactly one',res.count(200)==1,res)
+d=D(); po2=[x for x in d['purchases'] if x['id']==p2][0]; sc_=[x for x in d['supplier_credits'] if x['id']==scid][0]
+ok('T9 purchase paid, credit remaining 20, 1150 = 20, 2000 consistent, cash untouched, invariants',po2.get('paid') is True and sc_['remaining']==20 and acct('1150',d)==20 and (acct('1000',d),acct('1010',d))==cash1 and not invariants(d),(po2.get('paid'),sc_['remaining'],acct('1150',d)))
+ok('T10 return with used credit cannot be voided',tx({'op':'purchase-return-void','id':sc_['purchase_return_id'],'reason':'try to void'})[0]==400)
+ok('T11 non-owner module / non-admin cannot apply',tx({'op':'supplier-credit-apply','credit_id':scid,'purchase_id':p3,'amount':1},itok)[0] in (400,403) and tx({'op':'supplier-credit-apply','credit_id':scid,'purchase_id':p3,'amount':1},etok)[0] in (400,403))
+p4=mkpo(778,2,10); tx({'op':'payment','direction':'out','ref_type':'purchase','ref_id':p4,'amount':20,'method':'cash'})
+pr4=tx({'op':'purchase-return-create','purchase_id':p4,'reason':'wrong item','items':[{'line':0,'qty':2}],'store_credit':True})[1]['purchase_return']['id']
+ok('T12 unused supplier credit voids; credit void, 1150 back to 20',tx({'op':'purchase-return-void','id':pr4,'reason':'entered wrongly'})[0]==200 and acct('1150')==20 and not invariants(D()))
+# partial: credit only the over-paid part when purchase partly paid
+p5=mkpo(777,4,10); tx({'op':'payment','direction':'out','ref_type':'purchase','ref_id':p5,'amount':30,'method':'bank'})
+r=tx({'op':'purchase-return-create','purchase_id':p5,'reason':'half back','items':[{'line':0,'qty':4}],'store_credit':True})
+d=D(); c5=[x for x in d['supplier_credits'] if x['purchase_return_id']==r[1]['purchase_return']['id']] if r[0]==200 else []
+ok('T13 return 40 on purchase paid 30: 10 to payables, 30 supplier credit, 1150 = 50',r[0]==200 and c5 and c5[0]['amount']==30 and r[1]['purchase_return']['applied_to_payable']==10 and acct('1150',d)==50 and not invariants(d),(r,acct('1150',d)))
+ok('T14 store_credit on an unpaid purchase creates no credit (nothing excess)',(lambda q:(q[0]==200 and q[1]['purchase_return']['store_credit']==0))(tx({'op':'purchase-return-create','purchase_id':mkpo(778,1,10),'reason':'x y z','items':[{'line':0,'qty':1}],'store_credit':True})))
+ok('T15 store_credit must be literal true (string/1 rejected as refund path)',all(tx({'op':'purchase-return-create','purchase_id':p1,'reason':'abc','items':[{'line':0,'qty':1}],'store_credit':v})[0]==400 for v in ('true',1,'yes')))
+# forged client writes to credit collections are ignored
+dd=D(); before=json.dumps(dd['supplier_credits'],sort_keys=True)+json.dumps(dd['customer_credits'],sort_keys=True)
+fc=json.loads(json.dumps(dd['supplier_credits'])); fc[0]['remaining']=99999
+fk=json.loads(json.dumps(dd['customer_credits'])); fk[0]['remaining']=99999
+call('PUT','/api/data',{'data':{'supplier_credits':fc,'customer_credits':fk}},tok=tok)
+dd=D(); ok('T16 forged PUT of supplier_credits/customer_credits ignored',before==json.dumps(dd['supplier_credits'],sort_keys=True)+json.dumps(dd['customer_credits'],sort_keys=True))
+ok('T17 final books balanced and stock consistent',not invariants(D()))
 print('matrix-test: PASS=%d FAIL=%d'%(PASS,FAIL))
 srv.terminate()

@@ -39,7 +39,7 @@ const FUTURE_OK = process.env.NEXUS_TEST_ALLOW_FUTURE === '1' && process.env.NEX
 
 const SERVER_OWNED = new Set(['accounts', 'journal', 'payments', 'warehouses', 'stock_moves',
   'ledger', 'invoices', 'purchases', 'quotes', 'products', 'sales_orders', 'returns', 'recurring', 'expenses', 'projects', 'timesheets',
-  'tickets', 'ticket_replies', 'leave_requests', 'attendance', 'assets', 'pos_shifts', 'production', 'quality_checks', 'documents', 'credit_notes', 'purchase_returns']);
+  'tickets', 'ticket_replies', 'leave_requests', 'attendance', 'assets', 'pos_shifts', 'production', 'quality_checks', 'documents', 'credit_notes', 'customer_credits', 'supplier_credits', 'purchase_returns']);
 
 /* ---------------- browser sandbox ---------------- */
 
@@ -1381,6 +1381,8 @@ const OPS = {
       need(pr.status === 'posted', 'this purchase return is not active (already void)');
       need(String(p.reason || '').trim().length >= 5, 'a void reason of at least 5 characters is required');
       need(ctx.num(pr.refunded) < 0.005, 'this return included a confirmed supplier refund; voiding it would need that money recorded as sent back, which is not supported yet');
+      const sc = (S.data.supplier_credits || []).find(x => x.purchase_return_id === pr.id);
+      if (sc) need(sc.status === 'open' && Math.abs(ctx.num(sc.remaining) - ctx.num(sc.amount)) < 0.005 && !(sc.applications || []).length, 'the supplier credit from this return has already been used; it cannot be voided');
       const po = S.data.purchases.find(x => x.id === pr.purchase_id);
       need(po && po.status === 'received', 'the purchase is no longer in a state that can take this return back');
       const orig = S.data.journal.filter(j => j.ref_type === 'purchase_return' && j.ref_id === pr.id);
@@ -1391,6 +1393,7 @@ const OPS = {
       if (stockItems.length) ctx.applyStock(stockItems, +1, { reason: 'purchase-return-void', ref_type: 'purchase_return', ref_id: pr.id });
       S.add('ledger', { date: ctx.todayStr(), type: 'expense', category: 'Purchase return void', amount: r2(ctx.num(pr.total)), ref_type: 'purchase_return', ref_id: pr.id, memo: `${pr.number} voided` });
       po.returned_amount = Math.max(0, r2(ctx.num(po.returned_amount) - ctx.num(pr.total)));
+      if (sc) Object.assign(sc, { status: 'void', remaining: 0 });
       Object.assign(pr, { status: 'void', void_reason: String(p.reason).trim(), voided_by: user.username, voided_at: new Date().toISOString() });
       S.save();
       return { purchase_return: pr };
@@ -1422,6 +1425,33 @@ const OPS = {
       if (cc.remaining < 0.005) { cc.remaining = 0; cc.status = 'used'; }
       S.save();
       return { customer_credit: cc, payment: row };
+    },
+  },
+
+  /* Use a supplier credit against one of the SAME supplier's open received purchases. Dr Payables / Cr Supplier
+     Credits through the normal payment path. No cash or bank moves. Explicit credit, purchase and amount; admin only. */
+  'supplier-credit-apply': {
+    view: 'purchases',
+    run(ctx, p, user) {
+      need(user && user.role === 'admin', 'only an admin can apply a supplier credit');
+      const S = ctx.store, r2 = v => Math.round(v * 100) / 100;
+      const sc = (S.data.supplier_credits || []).find(x => x.id === Number(p.credit_id));
+      need(sc && sc.status === 'open', 'supplier credit not found or not open');
+      const po = S.data.purchases.find(x => x.id === Number(p.purchase_id));
+      need(po && po.status === 'received' && po.journal_received, 'choose a received purchase');
+      need(po.supplier_id != null && po.supplier_id === sc.supplier_id, 'a supplier credit can only be used on the same supplier\'s purchase');
+      const amount = r2(Number(p.amount));
+      need(Number.isFinite(amount) && amount > 0, 'amount must be positive');
+      need(amount <= ctx.num(sc.remaining) + 0.005, 'amount is more than the credit that is left');
+      need(amount <= ctx.purchaseOpenAmount(po) + 0.005, 'amount is more than we still owe on this purchase');
+      ctx.ensureCOA();
+      const row = ctx.recordPayment({ direction: 'out', supplier_id: po.supplier_id, ref_type: 'purchase', ref_id: po.id, amount, method: 'store_credit', date: ctx.todayStr(), memo: `Supplier credit ${sc.number} applied to ${po.number}` }, 'supplier-credit-apply');
+      need(row, 'could not apply the credit');
+      sc.remaining = r2(ctx.num(sc.remaining) - amount);
+      sc.applications = (sc.applications || []).concat([{ purchase_id: po.id, amount, date: ctx.todayStr(), by: user.username, payment_id: row.id }]);
+      if (sc.remaining < 0.005) { sc.remaining = 0; sc.status = 'used'; }
+      S.save();
+      return { supplier_credit: sc, payment: row };
     },
   },
 
@@ -1473,19 +1503,24 @@ const OPS = {
       const toAP = Math.min(total, open);
       const excess = r2(total - toAP);
       let method = null, refundRef = null, refundBy = null;
-      if (excess > 0.005) { const c = confirmedRefund(ctx, p, excess, user, 'supplier'); method = c.method; refundRef = c.reference; refundBy = c.by; }
+      /* explicit choice: the part we already paid becomes a credit WITH the supplier (an asset, 1150),
+         not cash. It can only be used against this supplier's own open received purchases. */
+      const asCredit = excess > 0.005 && p.store_credit === true;
+      if (asCredit) need(po.supplier_id != null && S.data.suppliers.some(s => s.id === po.supplier_id), 'a supplier credit needs the purchase to belong to a supplier');
+      if (excess > 0.005 && !asCredit) { const c = confirmedRefund(ctx, p, excess, user, 'supplier'); method = c.method; refundRef = c.reference; refundBy = c.by; }
       ctx.ensureCOA();
       const date = ctx.todayStr();
       const number = `PR-${String(S.data.meta.prSeq++).padStart(4, '0')}`;
       const pr = S.add('purchase_returns', { number, purchase_id: po.id, purchase_number: po.number, supplier_id: po.supplier_id || null, date, reason: String(p.reason).trim(),
-        items, total, applied_to_payable: toAP, refunded: excess, refund_method: method, refund_reference: refundRef, refund_confirmed_by: refundBy, status: 'posted', client_ref: p.client_ref ? String(p.client_ref) : null });
+        items, total, applied_to_payable: toAP, refunded: asCredit ? 0 : excess, store_credit: asCredit ? excess : 0, refund_method: method, refund_reference: refundRef, refund_confirmed_by: refundBy, status: 'posted', client_ref: p.client_ref ? String(p.client_ref) : null });
       const stockItems = items.filter(it => it.product_id != null).map(it => ({ product_id: it.product_id, qty: it.qty }));
       if (stockItems.length) ctx.applyStock(stockItems, -1, { reason: 'purchase-return', ref_type: 'purchase_return', ref_id: pr.id });
       const lines = [{ account_id: ctx.accountByCode('1200').id, credit: total }];
       if (toAP > 0.005) lines.push({ account_id: ctx.accountByCode('2000').id, debit: toAP });
-      if (excess > 0.005) lines.push({ account_id: ctx.settlementAccountId(method), debit: excess });
+      if (excess > 0.005) lines.push({ account_id: asCredit ? ctx.accountByCode('1150').id : ctx.settlementAccountId(method), debit: excess });
       need(ctx.postJournal({ date, memo: `Purchase return ${number} (${po.number})`, ref_type: 'purchase_return', ref_id: pr.id, lines }), 'purchase return could not be posted');
       S.add('ledger', { date, type: 'income', category: 'Purchase return', amount: total, ref_type: 'purchase_return', ref_id: pr.id, memo: `${number} returned to supplier` });
+      if (asCredit) { S.data.supplier_credits = S.data.supplier_credits || []; S.add('supplier_credits', { supplier_id: po.supplier_id, purchase_return_id: pr.id, number: `SC-${String(pr.id).padStart(4, '0')}`, date, amount: excess, remaining: excess, status: 'open', applications: [] }); }
       po.returned_amount = r2(ctx.num(po.returned_amount) + total);
       S.save();
       return { purchase_return: pr };
