@@ -45,3 +45,4 @@ Not changed / still open: Windows scripts were reviewed but never run on Windows
 - recurring-run date is server-owned (client cannot name a future date); real-calendar date checks on journal, ledger, expense, timesheet, assets; depreciation cannot post for future months; disposal cannot precede purchase or posted depreciation; deleting a draft time invoice releases the time.
 - POS shift amounts bounded; a recorded QC failure cannot be flipped to pass; documents editable only in draft.
 - hotfix8: browser-only mode warning banner at entry; Arabic install/upgrade instructions in deploy/README-AR.md.
+- hotfix9: partial purchase receipts (purchase-receive) with UI, locks while partly received, tests RC1-RC20.

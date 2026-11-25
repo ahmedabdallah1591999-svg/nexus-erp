@@ -13,7 +13,7 @@ Object.assign(I18N.ar, {
   'Put credited goods back in stock':'إرجاع البضاعة المرتجعة إلى المخزون','Yes':'نعم','No':'لا',
   'Money already paid back to the customer? (needed only if they already paid)':'هل رُدّ المبلغ فعلياً للعميل؟ (مطلوب فقط إذا كان قد دفع)','Money already received back from the supplier? (needed only if we already paid)':'هل استُرد المبلغ فعلياً من المورد؟ (مطلوب فقط إذا كنا قد دفعنا)','No, nothing moved':'لا، لم تتحرك أموال','Yes, it was paid back':'نعم، تم الرد','Yes, it was received':'نعم، تم الاستلام','Refund method':'طريقة الرد','Refund reference (transfer / receipt no.)':'مرجع الرد (رقم التحويل / الإيصال)',
   'Credit note posted':'تم ترحيل الإشعار الدائن','Purchase return posted':'تم ترحيل مرتجع المشتريات',
-  'Corrections need the server.':'التصحيحات تحتاج الخادم.','Browser-only mode: data stays in this browser and nothing is enforced or protected here (no real accounts, permissions, locked accounting or corrections). For the protected mode run server.js.':'وضع المتصفح فقط: البيانات تبقى في هذا المتصفح ولا يوجد هنا أي إلزام أو حماية (لا حسابات حقيقية ولا صلاحيات ولا محاسبة مقفلة ولا تصحيحات). للوضع المحمي شغّل server.js.','Nothing left to credit':'لا شيء متبقٍ للإشعار','Nothing left to return':'لا شيء متبقٍ للإرجاع',
+  'Corrections need the server.':'التصحيحات تحتاج الخادم.','Receive goods':'استلام بضاعة','Partly received':'مستلم جزئياً','Quantity received now':'الكمية المستلمة الآن','Left to receive':'المتبقي للاستلام','Goods received':'تم الاستلام','Nothing left to receive':'لا شيء متبقٍ للاستلام','Enter a quantity to receive':'أدخل كمية للاستلام','Browser-only mode: data stays in this browser and nothing is enforced or protected here (no real accounts, permissions, locked accounting or corrections). For the protected mode run server.js.':'وضع المتصفح فقط: البيانات تبقى في هذا المتصفح ولا يوجد هنا أي إلزام أو حماية (لا حسابات حقيقية ولا صلاحيات ولا محاسبة مقفلة ولا تصحيحات). للوضع المحمي شغّل server.js.','Nothing left to credit':'لا شيء متبقٍ للإشعار','Nothing left to return':'لا شيء متبقٍ للإرجاع',
   'credited':'مُشعَر دائناً','No credit notes yet.':'لا توجد إشعارات دائنة بعد.','No purchase returns yet.':'لا توجد مرتجعات مشتريات بعد.',
   'Credit':'إشعار','Return to supplier':'إرجاع للمورد','Refunded':'مردود','Applied to balance':'مخصوم من الرصيد','Left to credit':'المتبقي للإشعار','Left to return':'المتبقي للإرجاع',
   'Posts a numbered credit note with its own reversing entries. The invoice is not edited.':'يُرحَّل إشعار دائن مرقم بقيوده العكسية. لا تُعدَّل الفاتورة.',
@@ -108,3 +108,17 @@ function renderCorrections(kind) {
   host.appendChild(div);
 }
 
+
+/* Partial receipt: receive part (or the rest) of an ordered purchase. Server mode only. */
+function openReceive(po) {
+  if (!inServerMode()) { toast(t('Corrections need the server.')); return; }
+  const lines = (po.items || []).map((it, i) => ({ it, i, left: num(it.qty) - num(it.received_qty) })).filter(x => x.left > 1e-9);
+  if (!lines.length) { toast(t('Nothing left to receive')); return; }
+  const fields = lines.map(x => ({ key: 'q' + x.i, type: 'number', label: `${t('Quantity received now')}: ${x.it.description || (store.product(x.it.product_id) || {}).name || t('Item')} (${t('Left to receive')} ${x.left})`, value: x.left }));
+  openModal(`${t('Receive goods')} — ${po.number}`, fields, out => {
+    const items = lines.map(x => ({ line: x.i, qty: num(out['q' + x.i]) })).filter(x => x.qty > 0);
+    if (!items.length) { toast(t('Enter a quantity to receive')); return; }
+    txCall('purchase-receive', { id: po.id, items, client_ref: 'rc-' + po.id + '-' + Date.now() }, t('Goods received'));
+    closeModal();
+  });
+}

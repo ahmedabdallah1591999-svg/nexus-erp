@@ -256,5 +256,39 @@ ok('D3 owner cannot approve own doc',tx({'op':'doc-status','id':dc,'status':'app
 ok('D4 other user approves',tx({'op':'doc-status','id':dc,'status':'approved'},q2)[0]==200)
 ok('D5 approved cannot be edited or skipped to draft',tx({'op':'doc-save','id':dc,'out':{'title':'x'}},q2)[0]==400 and tx({'op':'doc-status','id':dc,'status':'draft'},q2)[0]==400)
 d=call('GET','/api/data',tok=tok)[1]['data']; ok('D6 invariants unchanged by non-financial modules',not invariants(d),invariants(d))
+
+# ---- partial receipts ----
+pa=tx({'op':'product-save','out':{'name':'RA','price':20,'cost':10,'stock':0}})[1]['product']['id']
+pb=tx({'op':'product-save','out':{'name':'RB','price':9,'cost':5,'stock':0}})[1]['product']['id']
+def prod_stock(i): return [p for p in call('GET','/api/data',tok=tok)[1]['data']['products'] if p['id']==i][0]['stock']
+def jsum(poid):
+    d=call('GET','/api/data',tok=tok)[1]['data']; ap=[a['id'] for a in d['accounts'] if a['code']=='2000'][0]; inv=[a['id'] for a in d['accounts'] if a['code']=='1200'][0]
+    return round(sum(l['credit']-l['debit'] for j in d['journal'] if j.get('ref_type')=='purchase' and j.get('ref_id')==poid for l in j['lines'] if l['account_id']==ap),2)
+po2=tx({'op':'purchase-save','out':{'status':'ordered','supplier_id':777,'items':[{'product_id':pa,'qty':10,'cost':10},{'product_id':pb,'qty':4,'cost':5}]}})[1]['purchase']['id']
+ok('RC1 ordered PO posts nothing',jsum(po2)==0 and prod_stock(pa)==0)
+r=tx({'op':'purchase-receive','id':po2,'client_ref':'rc-1','items':[{'line':0,'qty':4}]}); ok('RC2 first partial receipt',r[0]==200 and r[1].get('complete')==False and r[1]['receipt']['amount']==40,r)
+ok('RC3 stock 4 and payable 40',prod_stock(pa)==4 and jsum(po2)==40)
+r=tx({'op':'purchase-receive','id':po2,'client_ref':'rc-1','items':[{'line':0,'qty':4}]}); ok('RC4 retry same ref returns original, no double stock',r[0]==200 and r[1].get('deduped') and prod_stock(pa)==4 and jsum(po2)==40,r)
+for name,items in (('over-receive',[{'line':0,'qty':7}]),('zero',[{'line':0,'qty':0}]),('negative',[{'line':0,'qty':-1}]),('unknown line',[{'line':9,'qty':1}]),('duplicate line',[{'line':0,'qty':1},{'line':0,'qty':1}]),('string qty',[{'line':0,'qty':'x'}]),('empty',[])):
+    ok('RC5 '+name+' refused',tx({'op':'purchase-receive','id':po2,'items':items})[0]==400)
+ok('RC6 stock/payable unchanged by refusals',prod_stock(pa)==4 and jsum(po2)==40)
+ok('RC7 lines cannot be edited while partly received',tx({'op':'purchase-save','id':po2,'out':{'status':'ordered','supplier_id':777,'items':[{'product_id':pa,'qty':99,'cost':1}]}})[0]==400)
+ok('RC8 cannot be marked received by save (would double-post)',tx({'op':'purchase-save','id':po2,'out':{'status':'received','supplier_id':777,'items':[{'product_id':pa,'qty':10,'cost':10},{'product_id':pb,'qty':4,'cost':5}]}})[0]==400)
+ok('RC9 cannot be deleted',tx({'op':'purchase-delete','id':po2})[0]==400)
+ok('RC10 note edit still allowed',tx({'op':'purchase-save','id':po2,'out':{'status':'ordered','supplier_id':777,'notes':'n','items':[{'product_id':pa,'qty':10,'cost':10},{'product_id':pb,'qty':4,'cost':5}]}})[0]==200)
+ok('RC11 return to supplier blocked until fully received',tx({'op':'purchase-return-create','purchase_id':po2,'reason':'abc','items':[{'line':0,'qty':1}]})[0]==400)
+ok('RC11b supplier payment on a partly received PO blocked',tx({'op':'payment','direction':'out','ref_type':'purchase','ref_id':po2,'amount':10,'method':'cash'})[0]==400)
+res=par(8,lambda i:tx({'op':'purchase-receive','id':po2,'client_ref':'cc-%d'%i,'items':[{'line':0,'qty':2}]})[0])
+ok('RC12 8 concurrent receipts of 2 against 6 left: exactly 3 accepted',res.count(200)==3,res)
+ok('RC13 stock A is 10 (never over-received)',prod_stock(pa)==10)
+r=tx({'op':'purchase-receive','id':po2,'client_ref':'rc-last','items':[{'line':1,'qty':4}]}); ok('RC14 last receipt completes the PO',r[0]==200 and r[1].get('complete')==True,r)
+d=call('GET','/api/data',tok=tok)[1]['data']; po=[x for x in d['purchases'] if x['id']==po2][0]
+ok('RC15 status received, flags set, receipts sum to PO total 120',po['status']=='received' and po['journal_received'] and po['stock_applied'] and abs(sum(x['amount'] for x in po['receipts'])-120)<0.005 and jsum(po2)==120,po)
+ok('RC16 further receipt refused',tx({'op':'purchase-receive','id':po2,'items':[{'line':0,'qty':1}]})[0]==400)
+ok('RC17 invariants after receipts',not invariants(d),invariants(d))
+ok('RC18 return to supplier works once fully received',tx({'op':'purchase-return-create','purchase_id':po2,'reason':'bad batch','items':[{'line':0,'qty':1}]})[0]==200)
+po3=tx({'op':'purchase-save','out':{'status':'ordered','supplier_id':777,'items':[{'description':'service','qty':1,'cost':50}]}})[1]['purchase']['id']
+ok('RC19 PO with a non-stock line cannot be partly received',tx({'op':'purchase-receive','id':po3,'items':[{'line':0,'qty':1}]})[0]==400)
+d=call('GET','/api/data',tok=tok)[1]['data']; ok('RC20 invariants at end',not invariants(d),invariants(d))
 print('matrix-test: PASS=%d FAIL=%d'%(PASS,FAIL))
 srv.terminate()

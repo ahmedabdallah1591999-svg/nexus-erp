@@ -79,6 +79,7 @@ Dedicated suites: corr-test (returns/credit notes/refund confirmation), forge-te
 | expense-save | finance or expenses | any-of modules (self-service scoped to own record); fuzzed in matrix; 403 without module |
 | leave-delete | employees or hr-self | any-of modules (self-service scoped to own record); fuzzed in matrix; 403 without module |
 | leave-save | employees or hr-self | any-of modules (self-service scoped to own record); fuzzed in matrix; 403 without module |
+| purchase-receive | purchases | partial receipts: product lines only; qty <= left; client_ref retry dedupe; last receipt takes the rounding remainder; matrix RC1-RC20 |
 
 ## Not hardened / unsupported (stated honestly)
 - Local single-user browser mode is client-authoritative: the browser can edit its own data. The guards above apply to server mode only.
@@ -90,3 +91,4 @@ Dedicated suites: corr-test (returns/credit notes/refund confirmation), forge-te
 
 - Manufacturing posts finished goods at the product's stated cost and the difference to Manufacturing Variance 5200 (standard-cost style); if a finished product has cost 0 the component cost goes entirely to variance. Single-level BOM only.
 - Test-only date seam needs two environment variables set together (never in shipped files; matrix R6 scans for it; R7 proves the production default blocks future periods).
+- Partial receipts (server mode, ordered purchases with product lines only): each receipt posts stock and Dr Inventory / Cr Payables for the received quantities at the PO cost. A partly received purchase cannot be edited (note only), deleted, marked received by save, paid to the supplier, or returned until it is fully received. No receipt void, no over-receipt, no receipts on purchases with non-stock lines, no landed cost.

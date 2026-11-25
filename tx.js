@@ -641,7 +641,16 @@ const OPS = {
       if (p.id != null) {
         rec = S.data.purchases.find(x => x.id === Number(p.id));
         need(rec, 'purchase not found');
-        if (rec.status === 'received' || rec.stock_applied || rec.journal_received) {
+        if ((rec.receipts || []).length && rec.status !== 'received') {
+          /* partially received: goods and payables are already posted for part of it. Only the note can change;
+             the rest is received through purchase-receive so every receipt stays on the record. */
+          const sameLines = fields.status === 'ordered' && fields.supplier_id === (rec.supplier_id || null)
+            && fields.items.length === rec.items.length
+            && fields.items.every((it, i) => it.product_id === (rec.items[i].product_id == null ? null : Number(rec.items[i].product_id))
+              && Math.abs(it.qty - Number(rec.items[i].qty)) < 1e-9 && Math.abs(it.cost - Number(rec.items[i].cost)) < 1e-9);
+          need(sameLines, 'this purchase is partly received: its lines cannot be changed or marked received here. Receive the remaining quantities with "Receive goods".');
+          rec.notes = fields.notes;
+        } else if (rec.status === 'received' || rec.stock_applied || rec.journal_received) {
           /* a received purchase is accounting history: only the note may change */
           const same = fields.status === 'received' && fields.supplier_id === (rec.supplier_id || null)
             && fields.items.length === rec.items.length
@@ -677,13 +686,69 @@ const OPS = {
     },
   },
 
+  /* Partial receipt: receive part of an ordered purchase. Each receipt moves stock in and posts
+     Dr Inventory / Cr Payables for exactly the received quantities at the PO line cost. The last
+     receipt takes the rounding remainder so receipts add up to the PO total; nothing else is
+     adjusted. Supplier payment and return to supplier stay blocked until the purchase is fully
+     received (they only work on a fully received purchase). Product lines only. */
+  'purchase-receive': {
+    view: 'purchases',
+    run(ctx, p, user) {
+      const S = ctx.store, r2 = v => Math.round(v * 100) / 100;
+      const po = S.data.purchases.find(x => x.id === Number(p.id));
+      need(po, 'purchase not found');
+      po.receipts = po.receipts || [];
+      const ref = p.client_ref ? String(p.client_ref).slice(0, 80) : '';
+      if (ref) {
+        const dup = po.receipts.find(r => r.client_ref === ref);
+        if (dup) return { purchase: po, receipt: dup, deduped: true };
+      }
+      need(po.status === 'ordered' && !po.journal_received && !po.stock_applied, 'only an ordered purchase can be received; a received one is already posted');
+      need(po.items.length > 0 && po.items.every(it => it.product_id != null), 'partial receipt needs every line to be a stock product; mark the purchase received instead');
+      need(Array.isArray(p.items) && p.items.length >= 1 && p.items.length <= 500, 'choose the quantities received');
+      const seen = new Set(), recv = [];
+      for (const l of p.items) {
+        need(l && typeof l === 'object', 'bad receipt line');
+        const i = Number(l.line), q = Number(l.qty);
+        need(Number.isInteger(i) && i >= 0 && i < po.items.length, 'unknown purchase line');
+        need(!seen.has(i), 'duplicate line in the receipt');
+        seen.add(i);
+        need(Number.isFinite(q) && q > 0 && q <= 1e9, 'received quantity must be positive');
+        const it = po.items[i], left = ctx.num(it.qty) - ctx.num(it.received_qty);
+        need(q <= left + 1e-9, `cannot receive more than ordered: ${left} left on line ${i + 1}`);
+        recv.push({ line: i, product_id: Number(it.product_id), qty: q, cost: ctx.num(it.cost) });
+      }
+      const complete = po.items.every((it, i) => {
+        const r = recv.find(x => x.line === i);
+        return Math.abs(ctx.num(it.qty) - ctx.num(it.received_qty) - (r ? r.qty : 0)) < 1e-9;
+      });
+      const prior = r2(po.receipts.reduce((a, r) => a + ctx.num(r.amount), 0));
+      const amount = complete ? r2(ctx.purchaseTotal(po) - prior) : r2(recv.reduce((a, r) => a + r.qty * r.cost, 0));
+      need(amount > 0, 'the received value is zero (check the line costs)');
+      ctx.ensureCOA();
+      ctx.applyStock(recv.map(r => ({ product_id: r.product_id, qty: r.qty })), +1, { reason: 'purchase-receipt', ref_type: 'purchase', ref_id: po.id });
+      const je = ctx.postJournal({ date: ctx.todayStr(), memo: `${po.number} receipt ${po.receipts.length + 1}`, ref_type: 'purchase', ref_id: po.id,
+        lines: [{ account_id: ctx.accountByCode('1200').id, debit: amount }, { account_id: ctx.accountByCode('2000').id, credit: amount }] });
+      need(je, 'receipt could not be posted');
+      S.add('ledger', { date: ctx.todayStr(), type: 'expense', category: 'Purchases', amount, ref_type: 'purchase', ref_id: po.id, memo: `${po.number} receipt ${po.receipts.length + 1}` });
+      for (const r of recv) po.items[r.line].received_qty = ctx.num(po.items[r.line].received_qty) + r.qty;
+      const rec = { n: po.receipts.length + 1, date: ctx.todayStr(), by: user.username, items: recv.map(r => ({ line: r.line, qty: r.qty })), amount, journal_id: je.id, client_ref: ref || null };
+      po.receipts.push(rec);
+      if (complete) {
+        po.status = 'received'; po.stock_applied = true; po.journal_received = true; po.ledger_posted = true; po.received_date = ctx.todayStr();
+      }
+      S.save();
+      return { purchase: po, receipt: rec, complete };
+    },
+  },
+
   'purchase-delete': {
     view: 'purchases',
     run(ctx, p) {
       const S = ctx.store;
       const po = S.data.purchases.find(x => x.id === Number(p.id));
       need(po, 'purchase not found');
-      need(po.status !== 'received' && !po.journal_received, 'received purchases are accounting history; reverse instead of deleting');
+      need(po.status !== 'received' && !po.journal_received && !(po.receipts || []).length, 'received or partly received purchases are accounting history; they cannot be deleted');
       if (po.stock_applied) ctx.applyStock(po.items.map(it => ({ product_id: it.product_id, qty: it.qty })), -1, { reason: 'purchase-delete', ref_type: 'purchase', ref_id: po.id });
       S.remove('purchases', po.id);
       return { deleted: po.id };
